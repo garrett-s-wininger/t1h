@@ -12,7 +12,7 @@ build:
 	zig build
 
 clean:
-	rm -r dist zig-out
+	rm -rf dist zig-out
 
 efi-dirs:
 	mkdir -p ${UEFI_BOOT_DIRECTORY}
