@@ -21,10 +21,11 @@ pub fn main() uefi.Error!void {
     const virtualizable = try is_virtualization_supported();
 
     if (!virtualizable) {
+        try logging.log("Error");
+        try logging.log("=====\r\n");
         try logging.log("No virtualization support detected. Hypervisor failed to intialize.");
     }
 
-    // TODO(garrett): Use a key press or other means of pausing, rather than CPU halt while we're
-    // developing.
+    // TODO(garrett): Use a key press or other means of pausing, rather than CPU halt.
     while (true) asm volatile ("hlt");
 }
