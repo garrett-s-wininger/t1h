@@ -1,51 +1,59 @@
+const amd = @import("amd.zig");
+const cpuid = @import("cpuid.zig");
 const logging = @import("../logging.zig");
 const std = @import("std");
 const uefi = std.os.uefi;
 
-const cpuid = struct {
-    const Result = struct {
-        eax: u32,
-        ebx: u32,
-        ecx: u32,
-        edx: u32
-    };
+const Backend = union(enum) {
+    amd: amd.Backend,
+    none,
 
-    fn query(leaf: u32, subleaf: u32) Result {
-        var eax: u32 = undefined;
-        var ebx: u32 = undefined;
-        var ecx: u32 = undefined;
-        var edx: u32 = undefined;
+    pub fn max_standard_func(self: @This()) u32 {
+        return switch (self) {
+            .amd => |backend| backend.max_standard_func,
+            .none => 0
+        };
+    }
 
-        asm volatile(
-            \\cpuid
-            : [_] "={eax}" (eax), [_] "={ebx}" (ebx), [_] "={ecx}" (ecx), [_] "={edx}" (edx),
-            : [leaf] "{eax}" (leaf), [subleaf] "{ecx}" (subleaf)
-        );
-
-        return .{
-            .eax = eax,
-            .ebx = ebx,
-            .ecx = ecx,
-            .edx = edx,
+    pub fn vendor_string(self: @This()) []const u8 {
+        return switch (self) {
+            .amd => amd.VendorString,
+            .none => "Unknown"
         };
     }
 };
 
-pub fn is_virtualization_supported() uefi.Error!bool {
-    var vendor: [12]u8 = undefined;
-    const basic_info = cpuid.query(0, 0);
+fn detect() Backend {
+    const basic_info = cpuid.max_standard_func_and_vendor();
 
-    @memcpy(vendor[0..4], std.mem.asBytes(&basic_info.ebx));
-    @memcpy(vendor[4..8], std.mem.asBytes(&basic_info.edx));
-    @memcpy(vendor[8..12], std.mem.asBytes(&basic_info.ecx));
+    if (std.mem.eql(u8, basic_info.vendor[0..12], amd.VendorString)) {
+        return .{
+            .amd = .{
+                .max_standard_func = basic_info.max_standard_func
+            }
+        };
+    } else {
+        return .none;
+    }
+}
+
+pub fn is_virtualization_supported() uefi.Error!bool {
+    const cpu = detect();
 
     try logging.log("");
     try logging.log("CPU Detection");
     try logging.log("=============\r\n");
 
     try logging.logFormatted(
-        "Vendor: {s}",
-        .{vendor[0..12]}
+        "Vendor Backend: {s}",
+        .{cpu.vendor_string()}
+    );
+
+    // TODO(garrett): Eliminate this log when there are more useful
+    // log lines to present.
+    try logging.logFormatted(
+        "Max Standard Function: 0x{x}",
+        .{cpu.max_standard_func()}
     );
 
     try logging.log("");
