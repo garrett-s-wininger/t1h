@@ -3,13 +3,22 @@ const std = @import("std");
 const logging = @import("logging.zig");
 const uefi = std.os.uefi;
 
-fn is_virtualization_supported() uefi.Error!bool {
-    const virtualization = switch (builtin.cpu.arch) {
-        .x86_64 => @import("virtualization/x86_64.zig"),
-        else => |architecture| @compileError("Unsupported architecture: " ++ @tagName(architecture)),
-    };
+const Architecture = switch (builtin.cpu.arch) {
+    .x86_64 => @import("arch/x86_64.zig"),
+    else => |architecture| @compileError("Unsupported architecture: " ++ @tagName(architecture)),
+};
 
-    return try virtualization.is_virtualization_supported();
+fn log_cpu_detection(backend: Architecture.Backend) uefi.Error!void {
+    try logging.log("");
+    try logging.log("CPU Detection");
+    try logging.log("=============\r\n");
+    try logging.logFormatted("Vendor: {s}", .{ backend.vendor_string() });
+}
+
+fn log_boot_failure(comptime message: []const u8) uefi.Error!void {
+    try logging.log("Error");
+    try logging.log("=====\r\n");
+    try logging.log(message ++ " Hypervisor failed to intialize.");
 }
 
 pub fn main() uefi.Error!void {
@@ -18,13 +27,12 @@ pub fn main() uefi.Error!void {
     try logging.log("==========\r\n");
     try logging.log("Entered T1H UEFI initialization...");
 
-    const virtualizable = try is_virtualization_supported();
+    const cpu = Architecture.detect() catch {
+        try log_boot_failure("Unsupported processor vendor detected.");
+        return error.Unsupported;
+    };
 
-    if (!virtualizable) {
-        try logging.log("Error");
-        try logging.log("=====\r\n");
-        try logging.log("No virtualization support detected. Hypervisor failed to intialize.");
-    }
+    try log_cpu_detection(cpu);
 
     // TODO(garrett): Use a key press or other means of pausing, rather than CPU halt.
     while (true) asm volatile ("hlt");
