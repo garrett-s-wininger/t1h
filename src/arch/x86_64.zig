@@ -4,21 +4,46 @@ const std = @import("std");
 
 pub const Error = error {
     UnknownVendor,
+    VirtualizationNotSupported
 };
 
 pub const Backend = union(enum) {
     // TODO(garrett): Add Intel variant
     amd: amd.Backend,
 
-    pub fn max_standard_func(self: @This()) u32 {
+    pub fn prepareVirtualization(self: @This()) Error!void {
+        return switch (self) {
+            .amd => |backend| {
+                if (!backend.isVirtualizationSupported()) {
+                    return error.VirtualizationNotSupported;
+                }
+
+                // TODO(garrett): Flesh out the rest of the virtualization steps
+                @panic(
+                    std.fmt.comptimePrint(
+                        "Reached Unimplemented Code: {s}:{d}:{d} ({s})\r\n",
+                        .{ @src().file, @src().line, @src().column, @src().fn_name }
+                    )
+                );
+            },
+        };
+    }
+
+    pub fn maxExtendedFunc(self: @This()) u32 {
+        return switch (self) {
+            .amd => |backend| backend.max_extended_func,
+        };
+    }
+
+    pub fn maxStandardFunc(self: @This()) u32 {
         return switch (self) {
             .amd => |backend| backend.max_standard_func,
         };
     }
 
-    pub fn vendor_string(self: @This()) []const u8 {
+    pub fn vendorString(self: @This()) []const u8 {
         return switch (self) {
-            .amd => amd.VendorString,
+            .amd => amd.vendor_string,
         };
     }
 };
@@ -26,9 +51,10 @@ pub const Backend = union(enum) {
 pub fn detect() Error!Backend {
     const basic_info = cpuid.max_standard_func_and_vendor();
 
-    if (std.mem.eql(u8, basic_info.vendor[0..12], amd.VendorString)) {
+    if (std.mem.eql(u8, basic_info.vendor[0..12], amd.vendor_string)) {
         return .{
             .amd = .{
+                .max_extended_func = cpuid.max_extended_func(),
                 .max_standard_func = basic_info.max_standard_func
             }
         };

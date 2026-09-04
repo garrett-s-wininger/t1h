@@ -44,3 +44,6 @@ pub fn max_standard_func_and_vendor() MaxStandardFuncAndVendor {
     return result;
 }
 
+pub fn max_extended_func() u32 {
+    return query(0x8000_0000, 0).eax;
+}

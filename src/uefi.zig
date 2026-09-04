@@ -8,31 +8,43 @@ const Architecture = switch (builtin.cpu.arch) {
     else => |architecture| @compileError("Unsupported architecture: " ++ @tagName(architecture)),
 };
 
-fn log_cpu_detection(backend: Architecture.Backend) uefi.Error!void {
-    try logging.log("");
-    try logging.log("CPU Detection");
-    try logging.log("=============\r\n");
-    try logging.logFormatted("Vendor: {s}", .{ backend.vendor_string() });
-}
-
-fn log_boot_failure(comptime message: []const u8) uefi.Error!void {
+fn logBootFailure(comptime message: []const u8) uefi.Error!void {
     try logging.log("Error");
     try logging.log("=====\r\n");
     try logging.log(message ++ " Hypervisor failed to intialize.");
 }
 
-pub fn main() uefi.Error!void {
+fn logCpuDetection(backend: Architecture.Backend) uefi.Error!void {
     try logging.log("");
+    try logging.log("CPU Detection");
+    try logging.log("=============\r\n");
+    try logging.logFormatted("Vendor: {s}", .{ backend.vendorString() });
+    try logging.log("");
+}
+
+fn logHeader() uefi.Error!void {
     try logging.log("T1H v0.0.0");
     try logging.log("==========\r\n");
     try logging.log("Entered T1H UEFI initialization...");
+}
+
+pub fn main() uefi.Error!void {
+    if (uefi.system_table.con_out) |console| {
+        try console.clearScreen();
+    }
+
+    try logHeader();
 
     const cpu = Architecture.detect() catch {
-        try log_boot_failure("Unsupported processor vendor detected.");
+        try logBootFailure("Unsupported processor vendor detected.");
         return error.Unsupported;
     };
 
-    try log_cpu_detection(cpu);
+    try logCpuDetection(cpu);
+    cpu.prepareVirtualization() catch |err| switch (err) {
+        error.VirtualizationNotSupported => try logBootFailure("Processor does not support virtualization"),
+        else => {}
+    };
 
     // TODO(garrett): Use a key press or other means of pausing, rather than CPU halt.
     while (true) asm volatile ("hlt");
