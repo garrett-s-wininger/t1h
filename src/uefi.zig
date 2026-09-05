@@ -42,7 +42,8 @@ pub fn main() uefi.Error!void {
 
     try logCpuDetection(cpu);
     cpu.prepareVirtualization() catch |err| switch (err) {
-        error.VirtualizationNotSupported => try logBootFailure("Processor does not support virtualization"),
+        error.VirtualizationDisabled => try logBootFailure("Virtualization has been disabled, please check firmware settings."),
+        error.VirtualizationNotSupported => try logBootFailure("Processor does not support virtualization."),
         else => {}
     };
 

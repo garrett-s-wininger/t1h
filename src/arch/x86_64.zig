@@ -4,6 +4,7 @@ const std = @import("std");
 
 pub const Error = error {
     UnknownVendor,
+    VirtualizationDisabled,
     VirtualizationNotSupported
 };
 
@@ -14,9 +15,8 @@ pub const Backend = union(enum) {
     pub fn prepareVirtualization(self: @This()) Error!void {
         return switch (self) {
             .amd => |backend| {
-                if (!backend.isVirtualizationSupported()) {
-                    return error.VirtualizationNotSupported;
-                }
+                if (!backend.isVirtualizationSupported()) return error.VirtualizationNotSupported;
+                if (backend.isVirtualizationDisabled()) return error.VirtualizationDisabled;
 
                 // TODO(garrett): Flesh out the rest of the virtualization steps
                 @panic(
