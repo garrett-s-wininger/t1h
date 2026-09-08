@@ -20,7 +20,9 @@ pub const Backend = union(enum) {
                 if (!backend.isVirtualizationSupported()) return error.VirtualizationNotSupported;
                 if (backend.isVirtualizationDisabled()) return error.VirtualizationDisabled;
 
-                const allocation_start_address = allocator.allocatePages(1) catch {
+                // TODO(garrett): Move from our hardcoded 2-page host save area and vm control
+                // to a more dynamic setup.
+                const allocation_start_address = allocator.allocatePages(2) catch {
                     return error.MemoryRequestFailed;
                 };
 

@@ -71,6 +71,8 @@ pub fn main() uefi.Error!void {
         return error.Unsupported;
     };
 
+    // TODO(garrett): Move this over into a different page allocator
+    // once we exit boot services.
     const allocator = UefiPageAllocator.new() catch {
         try logBootFailure("Unable to initialize page allocation.");
         return error.Unsupported;

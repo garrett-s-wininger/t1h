@@ -1,3 +1,8 @@
+pub const DescriptorTableRegister = packed struct(u80) {
+    limit: u16,
+    base: u64,
+};
+
 pub fn rdmsr(register: u32) u64 {
     var eax: u32 = undefined;
     var edx: u32 = undefined;
@@ -9,6 +14,66 @@ pub fn rdmsr(register: u32) u64 {
     );
 
     return (@as(u64, edx) << 32) | eax;
+}
+
+pub fn readCr0() u64 {
+    return asm volatile(
+        \\movq %%cr0, %[out]
+        : [out] "={rax}" (-> u64)
+    );
+}
+
+pub fn readCr3() u64 {
+    return asm volatile(
+        \\movq %%cr3, %[out]
+        : [out] "={rax}" (-> u64)
+    );
+}
+
+pub fn readCr4() u64 {
+    return asm volatile(
+        \\movq %%cr4, %[out]
+        : [out] "={rax}" (-> u64)
+    );
+}
+
+pub fn readFlags() u64 {
+    return asm volatile(
+        \\pushfq
+        \\popq %[out]
+        : [out] "={rax}" (-> u64)
+        :
+        : .{ .rsp = true }
+    );
+}
+
+pub fn readGlobalDescriptorTableRegister(address: *DescriptorTableRegister) void {
+    var value: DescriptorTableRegister = undefined;
+
+    asm volatile(
+        \\sgdt %[value]
+        : [value] "=m" (value)
+    );
+
+    address.* = value;
+}
+
+pub fn readInterruptDescriptorTableRegister(address: *DescriptorTableRegister) void {
+    var value: DescriptorTableRegister = undefined;
+
+    asm volatile(
+        \\sidt %[value]
+        : [value] "=m" (value)
+    );
+
+    address.* = value;
+}
+
+pub fn readStackPointer() u64 {
+    return asm volatile(
+        \\movq %%rsp, %[out]
+        : [out] "={rax}" (-> u64)
+    );
 }
 
 pub fn wrmsr(register: u32, value: u64) void {
