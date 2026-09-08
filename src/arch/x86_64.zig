@@ -1,8 +1,10 @@
 const amd = @import("x86_64/amd.zig");
+const alloc = @import("allocation.zig");
 const cpuid = @import("x86_64/cpuid.zig");
 const std = @import("std");
 
 pub const Error = error {
+    MemoryRequestFailed,
     UnknownVendor,
     VirtualizationDisabled,
     VirtualizationNotSupported
@@ -12,19 +14,17 @@ pub const Backend = union(enum) {
     // TODO(garrett): Add Intel variant
     amd: amd.Backend,
 
-    pub fn prepareVirtualization(self: @This()) Error!void {
+    pub fn prepareVirtualization(self: @This(), allocator: alloc.PageAllocator) Error!void {
         return switch (self) {
             .amd => |backend| {
                 if (!backend.isVirtualizationSupported()) return error.VirtualizationNotSupported;
                 if (backend.isVirtualizationDisabled()) return error.VirtualizationDisabled;
 
-                // TODO(garrett): Flesh out the rest of the virtualization steps
-                @panic(
-                    std.fmt.comptimePrint(
-                        "Reached Unimplemented Code: {s}:{d}:{d} ({s})\r\n",
-                        .{ @src().file, @src().line, @src().column, @src().fn_name }
-                    )
-                );
+                const allocation_start_address = allocator.allocatePages(1) catch {
+                    return error.MemoryRequestFailed;
+                };
+
+                backend.prepareVirtualization(allocation_start_address);
             },
         };
     }

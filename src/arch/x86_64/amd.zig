@@ -1,5 +1,6 @@
 const cpuid = @import("cpuid.zig");
 const inst = @import("inst.zig");
+const std = @import("std");
 
 pub const vendor_string = "AuthenticAMD";
 
@@ -11,6 +12,11 @@ const svm_feature_bit = (1 << 2);
 
 const vm_cr_msr = 0xC001_0114;
 const svm_disabled_bit = (1 << 4);
+
+const efer_msr = 0xC000_0080;
+const svm_enable_bit = (1 << 12);
+
+const vm_host_save_address_msr = 0xC001_0117;
 
 pub const Backend = struct {
     max_standard_func: u32,
@@ -34,5 +40,22 @@ pub const Backend = struct {
         const svm_enabled = (extended_feature_information.ecx & svm_feature_bit) != 0;
 
         return svm_enabled;
+    }
+
+    pub fn prepareVirtualization(_: @This(), allocation_start_address: u64) void {
+        const efer = inst.rdmsr(efer_msr);
+        inst.wrmsr(efer_msr, efer | svm_enable_bit);
+
+        const host_save_area: *[4096]u8 = @ptrFromInt(allocation_start_address);
+        @memset(host_save_area, 0);
+        inst.wrmsr(vm_host_save_address_msr, @intFromPtr(host_save_area));
+
+        // TODO(garrett): Flesh out the rest of the virtualization steps
+        @panic(
+            std.fmt.comptimePrint(
+                "Reached Unimplemented Code: {s}:{d}:{d} ({s})\r\n",
+                .{ @src().file, @src().line, @src().column, @src().fn_name }
+            )
+        );
     }
 };

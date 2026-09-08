@@ -10,3 +10,14 @@ pub fn rdmsr(register: u32) u64 {
 
     return (@as(u64, edx) << 32) | eax;
 }
+
+pub fn wrmsr(register: u32, value: u64) void {
+    const low_order: u32 = @truncate(value);
+    const high_order: u32 = @truncate(value >> 32);
+
+    asm volatile(
+        \\wrmsr
+        :
+        : [register] "{ecx}" (register), [high_order] "{edx}" (high_order), [low_order] "{eax}" (low_order)
+    );
+}
