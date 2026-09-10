@@ -2,6 +2,7 @@ const alloc = @import("arch/allocation.zig");
 const builtin = @import("builtin");
 const std = @import("std");
 const logging = @import("logging.zig");
+const uart = @import("peripherals/uart.zig");
 const uefi = std.os.uefi;
 
 const Architecture = switch (builtin.cpu.arch) {
@@ -39,71 +40,74 @@ const UefiPageAllocator = struct {
     }
 };
 
-fn logBootFailure(comptime message: []const u8) uefi.Error!void {
-    try logging.log("");
-    try logging.log("Error");
-    try logging.log("=====\r\n");
-    try logging.log(message ++ " Hypervisor failed to intialize.");
+fn logBootFailure(comptime message: []const u8) void {
+    logging.log("");
+    logging.log("Error");
+    logging.log("=====\r\n");
+    logging.log(message ++ " Hypervisor failed to intialize.");
 }
 
-fn logGuestBootSuccessful() uefi.Error!void {
-    try logging.log("");
-    try logging.log("Guest Boot Status");
-    try logging.log("=================\r\n");
-    try logging.log("VM launch successful!");
+fn logGuestBootSuccessful() void {
+    logging.log("");
+    logging.log("Guest Boot Status");
+    logging.log("=================\r\n");
+    logging.log("VM launch successful!");
 }
 
-fn logCpuDetection(backend: Architecture.Backend) uefi.Error!void {
-    try logging.log("");
-    try logging.log("CPU Detection");
-    try logging.log("=============\r\n");
-    try logging.logFormatted("Vendor: {s}", .{ backend.vendorString() });
+fn logCpuDetection(backend: Architecture.Backend) void {
+    logging.log("");
+    logging.log("CPU Detection");
+    logging.log("=============\r\n");
+    logging.logFormatted("Vendor: {s}", .{ backend.vendorString() });
 }
 
-fn logHeader() uefi.Error!void {
-    try logging.log("T1H v0.0.0");
-    try logging.log("==========\r\n");
-    try logging.log("Entered T1H UEFI initialization...");
+fn logHeader() void {
+    logging.log("T1H v0.0.0");
+    logging.log("==========\r\n");
+    logging.log("Entered T1H UEFI initialization...");
 }
 
-pub fn main() uefi.Error!void {
-    if (uefi.system_table.con_out) |console| {
-        try console.clearScreen();
-    }
-
-    try logHeader();
-
-    var cpu = Architecture.detect() catch {
-        try logBootFailure("Unsupported processor vendor detected.");
-        return error.Unsupported;
-    };
-
-    // TODO(garrett): Move this over into a different page allocator
-    // once we exit boot services.
-    const allocator = UefiPageAllocator.new() catch {
-        try logBootFailure("Unable to initialize page allocation.");
-        return error.Unsupported;
-    };
-
-    try logCpuDetection(cpu);
-    cpu.prepareVirtualization(allocator) catch |err| switch (err) {
-        error.MemoryRequestFailed => try logBootFailure("Required memory could not be allocated."),
-        error.VirtualizationDisabled => try logBootFailure("Virtualization has been disabled, please check firmware settings."),
-        error.VirtualizationNotSupported => try logBootFailure("Processor does not support virtualization."),
-        else => {}
-    };
-
-    const status = cpu.runGuest();
-
-    switch (status) {
-        .halt => try logGuestBootSuccessful(),
-        .invalid_guest_state => try logBootFailure("Guest was configured incorrectly and could not boot.")
-    }
-
+fn postBootServices() void {
     @panic(
         std.fmt.comptimePrint(
             "\r\nReached Unimplemented Code: {s}:{d}:{d} ({s})\r\n",
             .{ @src().file, @src().line, @src().column, @src().fn_name }
         )
     );
+}
+
+pub fn main() uefi.Error!void {
+    // TODO(garrett): Don't hardcode COM1, automatically detect and select
+    // a console UART.
+    uart.init(uart.com1);
+    logHeader();
+
+    var cpu = Architecture.detect() catch {
+        logBootFailure("Unsupported processor vendor detected.");
+        return error.Unsupported;
+    };
+
+    // TODO(garrett): Move this over into a different page allocator
+    // once we exit boot services.
+    const allocator = UefiPageAllocator.new() catch {
+        logBootFailure("Unable to initialize page allocation.");
+        return error.Unsupported;
+    };
+
+    logCpuDetection(cpu);
+    cpu.prepareVirtualization(allocator) catch |err| switch (err) {
+        error.MemoryRequestFailed => logBootFailure("Required memory could not be allocated."),
+        error.VirtualizationDisabled => logBootFailure("Virtualization has been disabled, please check firmware settings."),
+        error.VirtualizationNotSupported => logBootFailure("Processor does not support virtualization."),
+        else => {}
+    };
+
+    const status = cpu.runGuest();
+
+    switch (status) {
+        .halt => logGuestBootSuccessful(),
+        .invalid_guest_state => logBootFailure("Guest was configured incorrectly and could not boot.")
+    }
+
+    postBootServices();
 }
