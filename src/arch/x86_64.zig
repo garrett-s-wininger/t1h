@@ -10,13 +10,18 @@ pub const Error = error {
     VirtualizationNotSupported
 };
 
+pub const GuestExit = enum {
+    halt,
+    invalid_guest_state
+};
+
 pub const Backend = union(enum) {
     // TODO(garrett): Add Intel variant
     amd: amd.Backend,
 
-    pub fn prepareVirtualization(self: @This(), allocator: alloc.PageAllocator) Error!void {
-        return switch (self) {
-            .amd => |backend| {
+    pub fn prepareVirtualization(self: *@This(), allocator: alloc.PageAllocator) Error!void {
+        return switch (self.*) {
+            .amd => |*backend| {
                 if (!backend.isVirtualizationSupported()) return error.VirtualizationNotSupported;
                 if (backend.isVirtualizationDisabled()) return error.VirtualizationDisabled;
 
@@ -43,6 +48,19 @@ pub const Backend = union(enum) {
         };
     }
 
+    pub fn runGuest(self: @This()) GuestExit {
+        return switch (self) {
+            .amd => |backend| {
+                const exit_code = backend.runGuest();
+
+                switch (exit_code) {
+                    0x78 => return .halt,
+                    else => return .invalid_guest_state
+                }
+            }
+        };
+    }
+
     pub fn vendorString(self: @This()) []const u8 {
         return switch (self) {
             .amd => amd.vendor_string,
@@ -57,7 +75,8 @@ pub fn detect() Error!Backend {
         return .{
             .amd = .{
                 .max_extended_func = cpuid.max_extended_func(),
-                .max_standard_func = basic_info.max_standard_func
+                .max_standard_func = basic_info.max_standard_func,
+                .vmcb = null
             }
         };
     } else {

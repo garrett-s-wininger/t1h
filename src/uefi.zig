@@ -40,9 +40,17 @@ const UefiPageAllocator = struct {
 };
 
 fn logBootFailure(comptime message: []const u8) uefi.Error!void {
+    try logging.log("");
     try logging.log("Error");
     try logging.log("=====\r\n");
     try logging.log(message ++ " Hypervisor failed to intialize.");
+}
+
+fn logGuestBootSuccessful() uefi.Error!void {
+    try logging.log("");
+    try logging.log("Guest Boot Status");
+    try logging.log("=================\r\n");
+    try logging.log("VM launch successful!");
 }
 
 fn logCpuDetection(backend: Architecture.Backend) uefi.Error!void {
@@ -50,7 +58,6 @@ fn logCpuDetection(backend: Architecture.Backend) uefi.Error!void {
     try logging.log("CPU Detection");
     try logging.log("=============\r\n");
     try logging.logFormatted("Vendor: {s}", .{ backend.vendorString() });
-    try logging.log("");
 }
 
 fn logHeader() uefi.Error!void {
@@ -66,7 +73,7 @@ pub fn main() uefi.Error!void {
 
     try logHeader();
 
-    const cpu = Architecture.detect() catch {
+    var cpu = Architecture.detect() catch {
         try logBootFailure("Unsupported processor vendor detected.");
         return error.Unsupported;
     };
@@ -86,6 +93,17 @@ pub fn main() uefi.Error!void {
         else => {}
     };
 
-    // TODO(garrett): Use a key press or other means of pausing, rather than CPU halt.
-    while (true) asm volatile ("hlt");
+    const status = cpu.runGuest();
+
+    switch (status) {
+        .halt => try logGuestBootSuccessful(),
+        .invalid_guest_state => try logBootFailure("Guest was configured incorrectly and could not boot.")
+    }
+
+    @panic(
+        std.fmt.comptimePrint(
+            "\r\nReached Unimplemented Code: {s}:{d}:{d} ({s})\r\n",
+            .{ @src().file, @src().line, @src().column, @src().fn_name }
+        )
+    );
 }

@@ -16,6 +16,13 @@ pub fn rdmsr(register: u32) u64 {
     return (@as(u64, edx) << 32) | eax;
 }
 
+pub fn readCodeSegment() u16 {
+    return asm volatile(
+        \\movw %%cs, %[out]
+        : [out] "={ax}" (-> u16)
+    );
+}
+
 pub fn readCr0() u64 {
     return asm volatile(
         \\movq %%cr0, %[out]
@@ -34,6 +41,20 @@ pub fn readCr4() u64 {
     return asm volatile(
         \\movq %%cr4, %[out]
         : [out] "={rax}" (-> u64)
+    );
+}
+
+pub fn readDataSegment() u16 {
+    return asm volatile(
+        \\movw %%ds, %[out]
+        : [out] "={ax}" (-> u16)
+    );
+}
+
+pub fn readExtraSegment() u16 {
+    return asm volatile(
+        \\movw %%es, %[out]
+        : [out] "={ax}" (-> u16)
     );
 }
 
@@ -73,6 +94,13 @@ pub fn readStackPointer() u64 {
     return asm volatile(
         \\movq %%rsp, %[out]
         : [out] "={rax}" (-> u64)
+    );
+}
+
+pub fn readStackSegment() u16 {
+    return asm volatile(
+        \\movw %%ss, %[out]
+        : [out] "={ax}" (-> u16)
     );
 }
 
