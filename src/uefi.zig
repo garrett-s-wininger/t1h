@@ -1,113 +1,74 @@
-const alloc = @import("arch/allocation.zig");
-const builtin = @import("builtin");
+const hypervisor = @import("hypervisor.zig");
 const std = @import("std");
 const logging = @import("logging.zig");
 const uart = @import("peripherals/uart.zig");
 const uefi = std.os.uefi;
 
-const Architecture = switch (builtin.cpu.arch) {
-    .x86_64 => @import("arch/x86_64.zig"),
-    else => |architecture| @compileError("Unsupported architecture: " ++ @tagName(architecture)),
-};
+fn prepareForHandoffToHypervisor(boot_services: *uefi.tables.BootServices) uefi.Error!hypervisor.UefiHandoff {
+    const memory_map_info = try boot_services.getMemoryMapInfo();
 
-const UefiPageAllocator = struct {
-    fn allocatePages(ctx: *anyopaque, count: usize) alloc.PageAllocator.Error!u64 {
-        const boot_services: *uefi.tables.BootServices = @ptrCast(@alignCast(ctx));
-        const pages = boot_services.allocatePages(.any, .loader_data, count) catch {
-            return error.AllocationFailed;
-        };
-
-        return @intFromPtr(pages.ptr);
-    }
-
-    const vtable = alloc.PageAllocator.VTable{
-        .allocatePages = allocatePages,
-    };
-
-    pub fn new() uefi.Error!alloc.PageAllocator {
-        if (uefi.system_table.boot_services) |boot_services| {
-            return .{ .ptr = boot_services, .vtable = &vtable };
-        }
-
+    if (memory_map_info.descriptor_version != 1) {
         return error.Unsupported;
     }
-};
 
-fn logBootFailure(comptime message: []const u8) void {
-    logging.log("");
-    logging.log("Error");
-    logging.log("=====\r\n");
-    logging.log(message ++ " Hypervisor failed to intialize.");
-}
+    const slack_descriptors = 8;
+    const required_bytes = memory_map_info.descriptor_size * (slack_descriptors + memory_map_info.len);
+    const required_pages = std.math.divCeil(usize, required_bytes, 4096) catch {
+        logging.log("Required page map size could not be calculated.");
+        return error.Unexpected;
+    };
 
-fn logGuestBootSuccessful() void {
-    logging.log("");
-    logging.log("Guest Boot Status");
-    logging.log("=================\r\n");
-    logging.log("VM launch successful!");
-}
+    const allocation = boot_services.allocatePages(.any, .loader_data, required_pages) catch |err| {
+        logging.log("Allocation of memory map buffer failed.");
+        return err;
+    };
 
-fn logCpuDetection(backend: Architecture.Backend) void {
-    logging.log("");
-    logging.log("CPU Detection");
-    logging.log("=============\r\n");
-    logging.logFormatted("Vendor: {s}", .{backend.vendorString()});
-}
+    const allocation_buffer = std.mem.sliceAsBytes(allocation);
+    const memory_map = boot_services.getMemoryMap(allocation_buffer) catch |err| switch (err) {
+        error.BufferTooSmall => {
+            // TODO(garrett): This can be corrected by re-adjusting our allocation and
+            // trying again a finite number of times. We're skipping here for simplicity.
+            logging.log("Memory map buffer was too small.");
+            return err;
+        },
+        error.InvalidParameter => {
+            logging.log("An invalid parameter was passed during memory map retrieval.");
+            return err;
+        },
+        else => {
+            logging.log("An unexpected error occurred while retrieving the memory map.");
+            return error.Unexpected;
+        },
+    };
 
-fn logHeader() void {
-    logging.log("T1H v0.0.0");
-    logging.log("==========\r\n");
-    logging.log("Entered T1H UEFI initialization...");
-}
-
-fn postBootServices() void {
-    @panic(std.fmt.comptimePrint("\r\nReached Unimplemented Code: {s}:{d}:{d} ({s})\r\n", .{ @src().file, @src().line, @src().column, @src().fn_name }));
+    return .{ .memory_map = memory_map, .memory_map_buffer = allocation_buffer };
 }
 
 pub fn main() uefi.Error!void {
-    // TODO(garrett): Don't hardcode COM1, automatically detect and select
-    // a console UART.
+    // TODO(garrett): Don't hardcode COM1, automatically detect and select a console UART.
     uart.init(uart.com1);
-    logHeader();
 
-    var cpu = Architecture.detect() catch {
-        logBootFailure("Unsupported processor vendor detected.");
+    const boot_services = uefi.system_table.boot_services orelse {
+        logging.log("UEFI boot services could not be detected.");
         return error.Unsupported;
     };
 
-    // TODO(garrett): Move this over into a different page allocator
-    // once we exit boot services.
-    const allocator = UefiPageAllocator.new() catch {
-        logBootFailure("Unable to initialize page allocation.");
-        return error.Unsupported;
-    };
+    const handoff_data = try prepareForHandoffToHypervisor(boot_services);
 
-    logCpuDetection(cpu);
-    cpu.prepareVirtualization(allocator) catch |err| switch (err) {
-        error.MemoryRequestFailed => {
-            logBootFailure("Required memory could not be allocated.");
-            return error.OutOfResources;
-        },
-        error.VirtualizationDisabled => {
-            logBootFailure("Virtualization has been disabled, please check firmware settings.");
-            return error.DeviceError;
-        },
-        error.VirtualizationNotSupported => {
-            logBootFailure("Processor does not support virtualization.");
-            return error.Unsupported;
+    // TODO(garrett): On an invalid map key, reacquire the memory map and retry with
+    // the new key. Combining this and the BufferTooSmall adjustment will result in
+    // a more robust UEFI handling path.
+    boot_services.exitBootServices(uefi.handle, handoff_data.memory_map.info.key) catch |err| switch (err) {
+        error.InvalidParameter => {
+            logging.log("Invalid parameter on boot service exit; memory map key is likely invalid.");
+            return err;
         },
         else => {
-            logBootFailure("An unknown error occurred; aborting.");
-            return error.Aborted;
+            logging.log("Failed to exit boot services for an unknown reason");
+            return err;
         },
     };
 
-    const status = cpu.runGuest();
-
-    switch (status) {
-        .halt => logGuestBootSuccessful(),
-        .invalid_guest_state => logBootFailure("Guest was configured incorrectly and could not boot."),
-    }
-
-    postBootServices();
+    logging.log("UEFI boot service handling complete, transferring control to hypervisor...");
+    hypervisor.enter(handoff_data);
 }
