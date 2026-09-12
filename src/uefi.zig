@@ -13,11 +13,7 @@ const Architecture = switch (builtin.cpu.arch) {
 const UefiPageAllocator = struct {
     fn allocatePages(ctx: *anyopaque, count: usize) alloc.PageAllocator.Error!u64 {
         const boot_services: *uefi.tables.BootServices = @ptrCast(@alignCast(ctx));
-        const pages = boot_services.allocatePages(
-            .any,
-            .loader_data,
-            count
-        ) catch {
+        const pages = boot_services.allocatePages(.any, .loader_data, count) catch {
             return error.AllocationFailed;
         };
 
@@ -30,10 +26,7 @@ const UefiPageAllocator = struct {
 
     pub fn new() uefi.Error!alloc.PageAllocator {
         if (uefi.system_table.boot_services) |boot_services| {
-            return .{
-                .ptr = boot_services,
-                .vtable = &vtable
-            };
+            return .{ .ptr = boot_services, .vtable = &vtable };
         }
 
         return error.Unsupported;
@@ -58,7 +51,7 @@ fn logCpuDetection(backend: Architecture.Backend) void {
     logging.log("");
     logging.log("CPU Detection");
     logging.log("=============\r\n");
-    logging.logFormatted("Vendor: {s}", .{ backend.vendorString() });
+    logging.logFormatted("Vendor: {s}", .{backend.vendorString()});
 }
 
 fn logHeader() void {
@@ -68,12 +61,7 @@ fn logHeader() void {
 }
 
 fn postBootServices() void {
-    @panic(
-        std.fmt.comptimePrint(
-            "\r\nReached Unimplemented Code: {s}:{d}:{d} ({s})\r\n",
-            .{ @src().file, @src().line, @src().column, @src().fn_name }
-        )
-    );
+    @panic(std.fmt.comptimePrint("\r\nReached Unimplemented Code: {s}:{d}:{d} ({s})\r\n", .{ @src().file, @src().line, @src().column, @src().fn_name }));
 }
 
 pub fn main() uefi.Error!void {
@@ -96,17 +84,29 @@ pub fn main() uefi.Error!void {
 
     logCpuDetection(cpu);
     cpu.prepareVirtualization(allocator) catch |err| switch (err) {
-        error.MemoryRequestFailed => logBootFailure("Required memory could not be allocated."),
-        error.VirtualizationDisabled => logBootFailure("Virtualization has been disabled, please check firmware settings."),
-        error.VirtualizationNotSupported => logBootFailure("Processor does not support virtualization."),
-        else => {}
+        error.MemoryRequestFailed => {
+            logBootFailure("Required memory could not be allocated.");
+            return error.OutOfResources;
+        },
+        error.VirtualizationDisabled => {
+            logBootFailure("Virtualization has been disabled, please check firmware settings.");
+            return error.DeviceError;
+        },
+        error.VirtualizationNotSupported => {
+            logBootFailure("Processor does not support virtualization.");
+            return error.Unsupported;
+        },
+        else => {
+            logBootFailure("An unknown error occurred; aborting.");
+            return error.Aborted;
+        },
     };
 
     const status = cpu.runGuest();
 
     switch (status) {
         .halt => logGuestBootSuccessful(),
-        .invalid_guest_state => logBootFailure("Guest was configured incorrectly and could not boot.")
+        .invalid_guest_state => logBootFailure("Guest was configured incorrectly and could not boot."),
     }
 
     postBootServices();
