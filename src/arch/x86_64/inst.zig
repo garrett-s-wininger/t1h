@@ -56,6 +56,13 @@ pub fn readCr0() u64 {
     );
 }
 
+pub fn readCr2() u64 {
+    return asm volatile (
+        \\movq %%cr2, %[out]
+        : [out] "={rax}" (-> u64),
+    );
+}
+
 pub fn readCr3() u64 {
     return asm volatile (
         \\movq %%cr3, %[out]

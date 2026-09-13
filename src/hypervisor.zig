@@ -1,8 +1,6 @@
 const alloc = @import("arch/allocation.zig");
 const builtin = @import("builtin");
-const inst = @import("arch/x86_64/inst.zig");
 const logging = @import("logging.zig");
-const paging = @import("arch/x86_64/paging.zig");
 const std = @import("std");
 const uefi = std.os.uefi;
 
@@ -46,16 +44,23 @@ const BootstrapAllocator = struct {
             if (descriptor.type != .conventional_memory) continue;
             if (selected != null and descriptor.number_of_pages <= selected.?.number_of_pages) continue;
 
-            logging.logFormatted("Memory Selection: 0x{x} for {d} pages", .{ descriptor.physical_start, descriptor.number_of_pages });
+            logging.logFormatted(
+                "Memory Selection: 0x{x} for {d} pages",
+                .{ descriptor.physical_start, descriptor.number_of_pages },
+            );
+
             selected = descriptor;
         }
 
         const descriptor = selected orelse return error.NoValidMemoryRange;
 
-        // TODO(garrett): We assume we still have the identity-mapped pages inherited from the UEFI firmware. When we have our own
-        // page tables, this assumption no longer holds and we'll have to adjust the addressing.
+        // TODO(garrett): We assume we still have the identity-mapped pages inherited from the UEFI firmware. When
+        // we have our own page tables, this assumption no longer holds and we'll have to adjust the addressing.
         return .{
-            .region = @as([*]align(alloc.page_size) u8, @ptrFromInt(descriptor.physical_start))[0..(descriptor.number_of_pages * alloc.page_size)],
+            .region = @as(
+                [*]align(alloc.page_size) u8,
+                @ptrFromInt(descriptor.physical_start),
+            )[0..(descriptor.number_of_pages * alloc.page_size)],
             .offset = 0,
         };
     }
@@ -65,6 +70,22 @@ const Architecture = switch (builtin.cpu.arch) {
     .x86_64 => @import("arch/x86_64.zig"),
     else => |architecture| @compileError("Unsupported architecture: " ++ @tagName(architecture)),
 };
+
+fn panic(fault_info: Architecture.FaultInfo) noreturn {
+    logging.logFormatted("\r\nKernel Panic from {s} (Error Code:  0x{X:0>8}):\r\n", .{
+        Architecture.nameForInterruptVector(fault_info.interrupt_vector),
+        fault_info.error_code,
+    });
+
+    if (fault_info.fault_address) |address| {
+        logging.logFormatted("  CR2:    0x{X:0>8}", .{address});
+    }
+
+    logging.logFormatted("  RIP:    0x{X:0>8}", .{fault_info.instruction_pointer});
+    logging.logFormatted("  RSP:    0x{X:0>8}", .{fault_info.stack_pointer});
+    logging.logFormatted("  RFLAGS: 0x{X:0>8}", .{fault_info.register_flags});
+    Architecture.hlt();
+}
 
 pub fn enter(handoff_data: UefiHandoff) noreturn {
     var cpu = Architecture.detect() catch {
@@ -84,7 +105,7 @@ pub fn enter(handoff_data: UefiHandoff) noreturn {
     };
 
     logging.log("Host page tables installed.");
-    Architecture.initializeInterrupts();
+    Architecture.initializeInterrupts(&panic);
     logging.log("Interrupt handlers installed.");
 
     cpu.prepareVirtualization(allocator) catch |err| switch (err) {

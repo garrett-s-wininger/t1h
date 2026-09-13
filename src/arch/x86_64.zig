@@ -13,6 +13,7 @@ pub const Error = error{
     VirtualizationNotSupported,
 };
 
+pub const FaultInfo = idt.FaultInfo;
 pub const GuestExit = enum { halt, invalid_guest_state };
 
 pub const Backend = union(enum) {
@@ -72,7 +73,13 @@ pub fn detect() Error!Backend {
     const basic_info = cpuid.max_standard_func_and_vendor();
 
     if (std.mem.eql(u8, basic_info.vendor[0..12], amd.vendor_string)) {
-        return .{ .amd = .{ .max_extended_func = cpuid.max_extended_func(), .max_standard_func = basic_info.max_standard_func, .vmcb = null } };
+        return .{
+            .amd = .{
+                .max_extended_func = cpuid.max_extended_func(),
+                .max_standard_func = basic_info.max_standard_func,
+                .vmcb = null,
+            },
+        };
     } else {
         return error.UnknownVendor;
     }
@@ -91,7 +98,11 @@ pub fn initializeHostAddressSpace(allocator: alloc.PageAllocator) Error!void {
     const page_directory_pointer_start = page_table_start + alloc.page_size;
     const page_directory_table_start = page_table_start + (2 * alloc.page_size);
 
-    const page_tables: []align(alloc.page_size) u8 = @as([*]align(alloc.page_size) u8, @ptrFromInt(page_table_start))[0 .. alloc.page_size * 3];
+    const page_tables: []align(alloc.page_size) u8 = @as(
+        [*]align(alloc.page_size) u8,
+        @ptrFromInt(page_table_start),
+    )[0 .. alloc.page_size * 3];
+
     @memset(page_tables, 0);
 
     const pdt: *paging.PageDirectoryTable = @ptrFromInt(page_directory_table_start);
@@ -113,31 +124,36 @@ pub fn initializeHostAddressSpace(allocator: alloc.PageAllocator) Error!void {
     inst.writeCr3(page_table_start);
 }
 
-fn defaultHandler() callconv(.naked) noreturn {
-    asm volatile (
-        \\unexpected_interrupt:
-        \\  cli
-        \\1:
-        \\  hlt
-        \\  jmp 1b
-    );
-}
+pub fn initializeInterrupts(handler: idt.FatalFaultHandler) void {
+    idt.fatal_fault_handler = handler;
 
-// NOTE(garrett): This needs a static lifetime in the output binary to be addressable by the CPU.
-// We should treat this as initialized once and then constant for the lifetime of the hypervisor.
-var interrupt_table: idt.InterruptDescriptorTable = undefined;
+    const code_segment = inst.readCodeSegment();
 
-pub fn initializeInterrupts() void {
-    for (0..interrupt_table.len) |idx| {
-        interrupt_table[idx] = idt.gateForAddress(inst.readCodeSegment(), @intFromPtr(&defaultHandler));
+    for (0..idt.interrupt_table.len) |idx| {
+        idt.interrupt_table[idx] = idt.gateForAddress(
+            code_segment,
+            @intFromPtr(&idt.defaultHandler),
+        );
     }
 
-    // TODO(garrett): Load some more interesting handlers, rather than forever hang along with some
-    // logging.
+    idt.interrupt_table[idt.invalid_opcode_vector] = idt.gateForAddress(
+        code_segment,
+        @intFromPtr(&idt.invalidOpcodeEntry),
+    );
+
+    idt.interrupt_table[idt.general_protection_vector] = idt.gateForAddress(
+        code_segment,
+        @intFromPtr(&idt.generalProtectionFaultEntry),
+    );
+
+    idt.interrupt_table[idt.page_fault_vector] = idt.gateForAddress(
+        code_segment,
+        @intFromPtr(&idt.pageFaultEntry),
+    );
 
     var interrupt_descriptor_register = inst.DescriptorTableRegister{
         .limit = @sizeOf(idt.InterruptDescriptorTable) - 1,
-        .base = @intFromPtr(&interrupt_table),
+        .base = @intFromPtr(&idt.interrupt_table),
     };
 
     inst.loadInterruptDescriptorTable(&interrupt_descriptor_register);
@@ -149,5 +165,14 @@ pub fn hlt() noreturn {
             \\cli
             \\hlt
         );
+    }
+}
+
+pub fn nameForInterruptVector(interrupt_vector: u8) []const u8 {
+    switch (interrupt_vector) {
+        idt.invalid_opcode_vector => return "Invalid Opcode",
+        idt.general_protection_vector => return "General Protection Fault",
+        idt.page_fault_vector => return "Page Fault",
+        else => return "Unknown Fault",
     }
 }
