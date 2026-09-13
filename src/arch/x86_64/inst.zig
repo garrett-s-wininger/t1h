@@ -11,6 +11,14 @@ pub fn inb(port: u16) u8 {
     );
 }
 
+pub fn loadInterruptDescriptorTable(address: *const DescriptorTableRegister) void {
+    asm volatile (
+        \\ lidt (%[address])
+        :
+        : [address] "r" (address),
+        : .{ .memory = true });
+}
+
 pub fn outb(port: u16, value: u8) void {
     asm volatile (
         \\ outb %[value], %[port]

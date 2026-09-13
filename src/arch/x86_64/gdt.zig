@@ -1,17 +1,17 @@
 const std = @import("std");
 
-pub const SegmentSelector = packed struct (u16) {
+pub const SegmentSelector = packed struct(u16) {
     privilege_level: u2,
     table_selector: u1,
-    table_index: u13
+    table_index: u13,
 };
 
-pub const SegmentDescriptor = packed struct (u64) {
-    const Flags = packed struct (u4) {
+pub const SegmentDescriptor = packed struct(u64) {
+    const Flags = packed struct(u4) {
         reserved: u1,
         is_long_mode: u1,
         is_32_bit: u1,
-        is_limit_in_page_granularity: u1
+        is_limit_in_page_granularity: u1,
     };
 
     limit_low: u16,
@@ -23,9 +23,7 @@ pub const SegmentDescriptor = packed struct (u64) {
     base_high: u8,
 
     pub fn base(self: @This()) u64 {
-        return self.base_low
-            | (@as(u64, self.base_middle) << 16)
-            | (@as(u64, self.base_high) << 24);
+        return self.base_low | (@as(u64, self.base_middle) << 16) | (@as(u64, self.base_high) << 24);
     }
 
     pub fn limit(self: @This()) u32 {

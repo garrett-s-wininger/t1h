@@ -1,11 +1,17 @@
 const amd = @import("x86_64/amd.zig");
 const alloc = @import("allocation.zig");
 const cpuid = @import("x86_64/cpuid.zig");
+const idt = @import("x86_64/idt.zig");
 const inst = @import("x86_64/inst.zig");
 const paging = @import("x86_64/paging.zig");
 const std = @import("std");
 
-pub const Error = error{ MemoryRequestFailed, UnknownVendor, VirtualizationDisabled, VirtualizationNotSupported };
+pub const Error = error{
+    MemoryRequestFailed,
+    UnknownVendor,
+    VirtualizationDisabled,
+    VirtualizationNotSupported,
+};
 
 pub const GuestExit = enum { halt, invalid_guest_state };
 
@@ -105,6 +111,36 @@ pub fn initializeHostAddressSpace(allocator: alloc.PageAllocator) Error!void {
     pml4[0]._low = pml4[0]._low | paging.present | paging.read_write;
 
     inst.writeCr3(page_table_start);
+}
+
+fn defaultHandler() callconv(.naked) noreturn {
+    asm volatile (
+        \\unexpected_interrupt:
+        \\  cli
+        \\1:
+        \\  hlt
+        \\  jmp 1b
+    );
+}
+
+// NOTE(garrett): This needs a static lifetime in the output binary to be addressable by the CPU.
+// We should treat this as initialized once and then constant for the lifetime of the hypervisor.
+var interrupt_table: idt.InterruptDescriptorTable = undefined;
+
+pub fn initializeInterrupts() void {
+    for (0..interrupt_table.len) |idx| {
+        interrupt_table[idx] = idt.gateForAddress(inst.readCodeSegment(), @intFromPtr(&defaultHandler));
+    }
+
+    // TODO(garrett): Load some more interesting handlers, rather than forever hang along with some
+    // logging.
+
+    var interrupt_descriptor_register = inst.DescriptorTableRegister{
+        .limit = @sizeOf(idt.InterruptDescriptorTable) - 1,
+        .base = @intFromPtr(&interrupt_table),
+    };
+
+    inst.loadInterruptDescriptorTable(&interrupt_descriptor_register);
 }
 
 pub fn hlt() noreturn {

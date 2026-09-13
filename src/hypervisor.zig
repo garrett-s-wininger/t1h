@@ -83,6 +83,10 @@ pub fn enter(handoff_data: UefiHandoff) noreturn {
         Architecture.hlt();
     };
 
+    logging.log("Host page tables installed.");
+    Architecture.initializeInterrupts();
+    logging.log("Interrupt handlers installed.");
+
     cpu.prepareVirtualization(allocator) catch |err| switch (err) {
         error.MemoryRequestFailed => {
             logging.log("Required memory could not be allocated.");
