@@ -106,3 +106,12 @@ pub fn initializeHostAddressSpace(allocator: alloc.PageAllocator) Error!void {
 
     inst.writeCr3(page_table_start);
 }
+
+pub fn hlt() noreturn {
+    while (true) {
+        asm volatile (
+            \\cli
+            \\hlt
+        );
+    }
+}

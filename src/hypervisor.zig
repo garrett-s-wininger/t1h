@@ -66,48 +66,39 @@ const Architecture = switch (builtin.cpu.arch) {
     else => |architecture| @compileError("Unsupported architecture: " ++ @tagName(architecture)),
 };
 
-fn hlt() noreturn {
-    while (true) {
-        asm volatile (
-            \\cli
-            \\hlt
-        );
-    }
-}
-
 pub fn enter(handoff_data: UefiHandoff) noreturn {
     var cpu = Architecture.detect() catch {
         logging.log("Unsupported processor vendor detected.");
-        hlt();
+        Architecture.hlt();
     };
 
     var bootstrap_allocator = BootstrapAllocator.init(handoff_data.memory_map) catch {
         logging.log("No valid memory range could be found for initialization.");
-        hlt();
+        Architecture.hlt();
     };
 
     const allocator = bootstrap_allocator.asPageAllocator();
     Architecture.initializeHostAddressSpace(allocator) catch {
         logging.log("Failed to initialize host address space.");
-        hlt();
+        Architecture.hlt();
     };
 
     cpu.prepareVirtualization(allocator) catch |err| switch (err) {
         error.MemoryRequestFailed => {
             logging.log("Required memory could not be allocated.");
-            hlt();
+            Architecture.hlt();
         },
         error.VirtualizationDisabled => {
             logging.log("Virtualization has been disabled, please check firmware settings.");
-            hlt();
+            Architecture.hlt();
         },
         error.VirtualizationNotSupported => {
             logging.log("Processor does not support virtualization.");
-            hlt();
+            Architecture.hlt();
         },
         else => {
             logging.log("An unknown error occurred; aborting.");
-            hlt();
+            Architecture.hlt();
         },
     };
 
@@ -119,5 +110,5 @@ pub fn enter(handoff_data: UefiHandoff) noreturn {
     }
 
     logging.log("Hypervisor gracefully terminating...");
-    hlt();
+    Architecture.hlt();
 }
