@@ -1,6 +1,8 @@
 const alloc = @import("arch/allocation.zig");
 const builtin = @import("builtin");
+const inst = @import("arch/x86_64/inst.zig");
 const logging = @import("logging.zig");
+const paging = @import("arch/x86_64/paging.zig");
 const std = @import("std");
 const uefi = std.os.uefi;
 
@@ -9,7 +11,7 @@ pub const UefiHandoff = struct { memory_map: uefi.tables.MemoryMapSlice, memory_
 // NOTE(garrett): This allocator is intentionally a minimal, post-UEFI example. We only select
 // the single largest range of conventional memory from our map and never free.
 const BootstrapAllocator = struct {
-    region: []align(4096) u8,
+    region: []align(alloc.page_size) u8,
     offset: usize,
 
     const vtable = alloc.PageAllocator.VTable{ .allocatePages = &allocatePages };
@@ -21,7 +23,7 @@ const BootstrapAllocator = struct {
 
         // TODO(garrett): Update to overflow-safe math in the presence of dynamic page
         // allocation counts.
-        const new_offset = (4096 * count) + allocator.offset;
+        const new_offset = (alloc.page_size * count) + allocator.offset;
         if (new_offset > allocator.region.len) {
             return error.AllocationFailed;
         }
@@ -53,7 +55,7 @@ const BootstrapAllocator = struct {
         // TODO(garrett): We assume we still have the identity-mapped pages inherited from the UEFI firmware. When we have our own
         // page tables, this assumption no longer holds and we'll have to adjust the addressing.
         return .{
-            .region = @as([*]align(4096) u8, @ptrFromInt(descriptor.physical_start))[0..(descriptor.number_of_pages * 4096)],
+            .region = @as([*]align(alloc.page_size) u8, @ptrFromInt(descriptor.physical_start))[0..(descriptor.number_of_pages * alloc.page_size)],
             .offset = 0,
         };
     }
@@ -85,6 +87,10 @@ pub fn enter(handoff_data: UefiHandoff) noreturn {
     };
 
     const allocator = bootstrap_allocator.asPageAllocator();
+    Architecture.initializeHostAddressSpace(allocator) catch {
+        logging.log("Failed to initialize host address space.");
+        hlt();
+    };
 
     cpu.prepareVirtualization(allocator) catch |err| switch (err) {
         error.MemoryRequestFailed => {
