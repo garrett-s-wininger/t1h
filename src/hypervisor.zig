@@ -1,14 +1,14 @@
 const alloc = @import("arch/allocation.zig");
 const builtin = @import("builtin");
 const logging = @import("logging.zig");
-const ns16550 = @import("peripherals/uart.zig");
 const std = @import("std");
 const uefi = std.os.uefi;
 
-pub const Serial = ns16550.Ns16550(Architecture.ConsoleUart);
+pub const Serial = Architecture.ConsoleUart;
 pub const Logger = logging.Logger(Serial);
 
 const Architecture = switch (builtin.cpu.arch) {
+    .aarch64 => @import("arch/aarch64.zig"),
     .x86_64 => @import("arch/x86_64.zig"),
     .riscv64 => @import("arch/riscv64.zig"),
     else => |architecture| @compileError("Unsupported architecture: " ++ @tagName(architecture)),
@@ -80,7 +80,7 @@ const BootstrapAllocator = struct {
 
 var kernel_logger: Logger = undefined;
 
-fn panic(fault_info: Architecture.FaultInfo) noreturn {
+fn x86_64_panic(fault_info: Architecture.FaultInfo) void {
     kernel_logger.logFormatted("\r\nKernel Panic from {s} (Error Code:  0x{X:0>8}):\r\n", .{
         Architecture.nameForInterruptVector(fault_info.interrupt_vector),
         fault_info.error_code,
@@ -93,6 +93,10 @@ fn panic(fault_info: Architecture.FaultInfo) noreturn {
     kernel_logger.logFormatted("  RIP:    0x{X:0>8}", .{fault_info.instruction_pointer});
     kernel_logger.logFormatted("  RSP:    0x{X:0>8}", .{fault_info.stack_pointer});
     kernel_logger.logFormatted("  RFLAGS: 0x{X:0>8}", .{fault_info.register_flags});
+}
+
+fn panic(fault_info: Architecture.FaultInfo) noreturn {
+    if (builtin.target.cpu.arch == .x86_64) x86_64_panic(fault_info);
     Architecture.hlt();
 }
 

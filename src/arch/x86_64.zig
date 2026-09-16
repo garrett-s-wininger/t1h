@@ -3,14 +3,15 @@ const alloc = @import("allocation.zig");
 const cpuid = @import("x86_64/cpuid.zig");
 const idt = @import("x86_64/idt.zig");
 const inst = @import("x86_64/inst.zig");
+const uart = @import("../peripherals/uart.zig");
 const paging = @import("x86_64/paging.zig");
 const std = @import("std");
-const uart = @import("x86_64/uart.zig");
+const x64_uart = @import("x86_64/uart.zig");
 
-pub const ConsoleUart = uart.PortMapped;
+pub const ConsoleUart = uart.Ns16550(x64_uart.PortMapped);
 
 // TODO(garrett): Don't hardcode COM1, automatically detect and select a console UART.
-pub const console_uart_base = uart.com1;
+pub const console_uart_base = x64_uart.com1;
 
 pub const Error = error{
     MemoryRequestFailed,
