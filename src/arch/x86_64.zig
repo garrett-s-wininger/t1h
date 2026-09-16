@@ -5,6 +5,12 @@ const idt = @import("x86_64/idt.zig");
 const inst = @import("x86_64/inst.zig");
 const paging = @import("x86_64/paging.zig");
 const std = @import("std");
+const uart = @import("x86_64/uart.zig");
+
+pub const ConsoleUart = uart.PortMapped;
+
+// TODO(garrett): Don't hardcode COM1, automatically detect and select a console UART.
+pub const console_uart_base = uart.com1;
 
 pub const Error = error{
     MemoryRequestFailed,

@@ -1,8 +1,20 @@
 const alloc = @import("arch/allocation.zig");
 const builtin = @import("builtin");
 const logging = @import("logging.zig");
+const ns16550 = @import("peripherals/uart.zig");
 const std = @import("std");
 const uefi = std.os.uefi;
+
+pub const Serial = ns16550.Ns16550(Architecture.ConsoleUart);
+pub const Logger = logging.Logger(Serial);
+
+const Architecture = switch (builtin.cpu.arch) {
+    .x86_64 => @import("arch/x86_64.zig"),
+    .riscv64 => @import("arch/riscv64.zig"),
+    else => |architecture| @compileError("Unsupported architecture: " ++ @tagName(architecture)),
+};
+
+pub const console_uart_base = Architecture.console_uart_base;
 
 pub const UefiHandoff = struct { memory_map: uefi.tables.MemoryMapSlice, memory_map_buffer: []u8 };
 
@@ -44,7 +56,7 @@ const BootstrapAllocator = struct {
             if (descriptor.type != .conventional_memory) continue;
             if (selected != null and descriptor.number_of_pages <= selected.?.number_of_pages) continue;
 
-            logging.logFormatted(
+            kernel_logger.logFormatted(
                 "Memory Selection: 0x{x} for {d} pages",
                 .{ descriptor.physical_start, descriptor.number_of_pages },
             );
@@ -66,63 +78,62 @@ const BootstrapAllocator = struct {
     }
 };
 
-const Architecture = switch (builtin.cpu.arch) {
-    .x86_64 => @import("arch/x86_64.zig"),
-    else => |architecture| @compileError("Unsupported architecture: " ++ @tagName(architecture)),
-};
+var kernel_logger: Logger = undefined;
 
 fn panic(fault_info: Architecture.FaultInfo) noreturn {
-    logging.logFormatted("\r\nKernel Panic from {s} (Error Code:  0x{X:0>8}):\r\n", .{
+    kernel_logger.logFormatted("\r\nKernel Panic from {s} (Error Code:  0x{X:0>8}):\r\n", .{
         Architecture.nameForInterruptVector(fault_info.interrupt_vector),
         fault_info.error_code,
     });
 
     if (fault_info.fault_address) |address| {
-        logging.logFormatted("  CR2:    0x{X:0>8}", .{address});
+        kernel_logger.logFormatted("  CR2:    0x{X:0>8}", .{address});
     }
 
-    logging.logFormatted("  RIP:    0x{X:0>8}", .{fault_info.instruction_pointer});
-    logging.logFormatted("  RSP:    0x{X:0>8}", .{fault_info.stack_pointer});
-    logging.logFormatted("  RFLAGS: 0x{X:0>8}", .{fault_info.register_flags});
+    kernel_logger.logFormatted("  RIP:    0x{X:0>8}", .{fault_info.instruction_pointer});
+    kernel_logger.logFormatted("  RSP:    0x{X:0>8}", .{fault_info.stack_pointer});
+    kernel_logger.logFormatted("  RFLAGS: 0x{X:0>8}", .{fault_info.register_flags});
     Architecture.hlt();
 }
 
-pub fn enter(handoff_data: UefiHandoff) noreturn {
+pub fn enter(logger: Logger, handoff_data: UefiHandoff) noreturn {
+    kernel_logger = logger;
+
     var cpu = Architecture.detect() catch {
-        logging.log("Unsupported processor vendor detected.");
+        kernel_logger.log("Unsupported processor vendor detected.");
         Architecture.hlt();
     };
 
     var bootstrap_allocator = BootstrapAllocator.init(handoff_data.memory_map) catch {
-        logging.log("No valid memory range could be found for initialization.");
+        kernel_logger.log("No valid memory range could be found for initialization.");
         Architecture.hlt();
     };
 
     const allocator = bootstrap_allocator.asPageAllocator();
     Architecture.initializeHostAddressSpace(allocator) catch {
-        logging.log("Failed to initialize host address space.");
+        kernel_logger.log("Failed to initialize host address space.");
         Architecture.hlt();
     };
 
-    logging.log("Host page tables installed.");
+    kernel_logger.log("Host page tables installed.");
     Architecture.initializeInterrupts(&panic);
-    logging.log("Interrupt handlers installed.");
+    kernel_logger.log("Interrupt handlers installed.");
 
     cpu.prepareVirtualization(allocator) catch |err| switch (err) {
         error.MemoryRequestFailed => {
-            logging.log("Required memory could not be allocated.");
+            kernel_logger.log("Required memory could not be allocated.");
             Architecture.hlt();
         },
         error.VirtualizationDisabled => {
-            logging.log("Virtualization has been disabled, please check firmware settings.");
+            kernel_logger.log("Virtualization has been disabled, please check firmware settings.");
             Architecture.hlt();
         },
         error.VirtualizationNotSupported => {
-            logging.log("Processor does not support virtualization.");
+            kernel_logger.log("Processor does not support virtualization.");
             Architecture.hlt();
         },
         else => {
-            logging.log("An unknown error occurred; aborting.");
+            kernel_logger.log("An unknown error occurred; aborting.");
             Architecture.hlt();
         },
     };
@@ -130,10 +141,10 @@ pub fn enter(handoff_data: UefiHandoff) noreturn {
     const status = cpu.runGuest();
 
     switch (status) {
-        .halt => logging.log("Guest boot successful!"),
-        .invalid_guest_state => logging.log("Guest was configured incorrectly and could not boot."),
+        .halt => kernel_logger.log("Guest boot successful!"),
+        .invalid_guest_state => kernel_logger.log("Guest was configured incorrectly and could not boot."),
     }
 
-    logging.log("Hypervisor gracefully terminating...");
+    kernel_logger.log("Hypervisor gracefully terminating...");
     Architecture.hlt();
 }
