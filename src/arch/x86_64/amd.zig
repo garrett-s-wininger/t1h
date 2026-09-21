@@ -25,17 +25,8 @@ const InterceptBlock1 = packed struct(u32) {
     _reserved2: u7,
 };
 
-const InterceptBlock2 = packed struct(u32) {
-    vmrun: u1,
-    _reserved: u31
-};
-
-const Segment = packed struct(u128) {
-    selector: u16,
-    attribute: u16,
-    limit: u32,
-    base: u64
-};
+const InterceptBlock2 = packed struct(u32) { vmrun: u1, _reserved: u31 };
+const Segment = packed struct(u128) { selector: u16, attribute: u16, limit: u32, base: u64 };
 
 const VirtualMachineControlBlock = struct {
     const total_size = 4096;
@@ -61,7 +52,8 @@ const VirtualMachineControlBlock = struct {
 
     fn attributeFromSegmentDescriptor(descriptor: gdt.SegmentDescriptor) u16 {
         const segment_flags: u4 = @bitCast(descriptor.flags);
-        return descriptor.access | (@as(u16, segment_flags) << 8);
+        const access_value: u8 = @bitCast(descriptor.access);
+        return @as(u16, access_value) | (@as(u16, segment_flags) << 8);
     }
 
     fn cpl(self: @This()) *u8 {
@@ -121,12 +113,12 @@ const VirtualMachineControlBlock = struct {
             .selector = 0,
             .attribute = 0,
             .limit = gdt_register.limit,
-            .base = gdt_register.base
+            .base = gdt_register.base,
         };
 
         const descriptor_table = gdt.DescriptorTable{
             .base_address = gdt_register.base,
-            .entries = (gdt_register.limit + 1) / @sizeOf(gdt.SegmentDescriptor)
+            .entries = (gdt_register.limit + 1) / @sizeOf(gdt.SegmentDescriptor),
         };
 
         const code_segment_selector: gdt.SegmentSelector = @bitCast(inst.readCodeSegment());
@@ -137,7 +129,7 @@ const VirtualMachineControlBlock = struct {
             code_segment_selector,
             data_segment_selector,
             extra_segment_selector,
-            stack_segment_selector
+            stack_segment_selector,
         };
 
         for (selectors) |selector| {
@@ -154,12 +146,7 @@ const VirtualMachineControlBlock = struct {
         var idt_register: inst.DescriptorTableRegister = undefined;
         inst.readInterruptDescriptorTableRegister(&idt_register);
 
-        self.idtr().* = .{
-            .selector = 0,
-            .attribute = 0,
-            .limit = idt_register.limit,
-            .base = idt_register.base
-        };
+        self.idtr().* = .{ .selector = 0, .attribute = 0, .limit = idt_register.limit, .base = idt_register.base };
     }
 
     fn fillSegment(segment_address: *Segment, descriptor_table: gdt.DescriptorTable, segment_selector: gdt.SegmentSelector) void {
@@ -169,7 +156,7 @@ const VirtualMachineControlBlock = struct {
             .selector = @bitCast(segment_selector),
             .attribute = attributeFromSegmentDescriptor(segment_descriptor.*),
             .limit = segment_descriptor.limit(),
-            .base = segment_descriptor.base()
+            .base = segment_descriptor.base(),
         };
     }
 
@@ -207,23 +194,22 @@ const VirtualMachineControlBlock = struct {
 };
 
 fn guestHlt() callconv(.naked) noreturn {
-    asm volatile("hlt");
+    asm volatile ("hlt");
 }
 
 fn vmrun(vmcb_address: u64) void {
-    asm volatile(
+    asm volatile (
         \\vmrun
         :
-        : [vmcb_address] "{rax}" (vmcb_address)
-        : .{ .memory = true }
-    );
+        : [vmcb_address] "{rax}" (vmcb_address),
+        : .{ .memory = true });
 }
 
 fn vmsave(save_address: u64) void {
-    asm volatile(
+    asm volatile (
         \\vmsave
         :
-        : [save_address] "{rax}" (save_address)
+        : [save_address] "{rax}" (save_address),
     );
 }
 

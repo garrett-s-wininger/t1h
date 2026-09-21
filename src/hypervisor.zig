@@ -120,6 +120,12 @@ pub fn enter(logger: Logger, handoff_data: UefiHandoff) noreturn {
     };
 
     kernel_logger.log("Host page tables installed.");
+    Architecture.initializeHostExecutionContext() catch {
+        kernel_logger.log("Failed to configure host execution context.");
+        Architecture.hlt();
+    };
+
+    kernel_logger.log("Host execution context configured.");
     Architecture.initializeInterrupts(&panic);
     kernel_logger.log("Interrupt handlers installed.");
 

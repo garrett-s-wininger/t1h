@@ -11,6 +11,14 @@ pub fn inb(port: u16) u8 {
     );
 }
 
+pub fn loadGlobalDescriptorTable(address: *const DescriptorTableRegister) void {
+    asm volatile (
+        \\lgdt (%[address])
+        :
+        : [address] "r" (address),
+        : .{ .memory = true });
+}
+
 pub fn loadInterruptDescriptorTable(address: *const DescriptorTableRegister) void {
     asm volatile (
         \\ lidt (%[address])
@@ -26,6 +34,18 @@ pub fn outb(port: u16, value: u8) void {
         : [value] "{al}" (value),
           [port] "{dx}" (port),
     );
+}
+
+pub fn reloadCodeSegment(selector: u64) void {
+    asm volatile (
+        \\ pushq %[selector]
+        \\ leaq 1f(%%rip), %%rax
+        \\ pushq %%rax
+        \\ lretq
+        \\ 1:
+        :
+        : [selector] "r" (selector),
+        : .{ .memory = true, .rax = true, .rsp = true });
 }
 
 pub fn rdmsr(register: u32) u64 {
@@ -45,49 +65,49 @@ pub fn rdmsr(register: u32) u64 {
 pub fn readCodeSegment() u16 {
     return asm volatile (
         \\movw %%cs, %[out]
-        : [out] "={ax}" (-> u16),
+        : [out] "=r" (-> u16),
     );
 }
 
 pub fn readCr0() u64 {
     return asm volatile (
         \\movq %%cr0, %[out]
-        : [out] "={rax}" (-> u64),
+        : [out] "=r" (-> u64),
     );
 }
 
 pub fn readCr2() u64 {
     return asm volatile (
         \\movq %%cr2, %[out]
-        : [out] "={rax}" (-> u64),
+        : [out] "=r" (-> u64),
     );
 }
 
 pub fn readCr3() u64 {
     return asm volatile (
         \\movq %%cr3, %[out]
-        : [out] "={rax}" (-> u64),
+        : [out] "=r" (-> u64),
     );
 }
 
 pub fn readCr4() u64 {
     return asm volatile (
         \\movq %%cr4, %[out]
-        : [out] "={rax}" (-> u64),
+        : [out] "=r" (-> u64),
     );
 }
 
 pub fn readDataSegment() u16 {
     return asm volatile (
         \\movw %%ds, %[out]
-        : [out] "={ax}" (-> u16),
+        : [out] "=r" (-> u16),
     );
 }
 
 pub fn readExtraSegment() u16 {
     return asm volatile (
         \\movw %%es, %[out]
-        : [out] "={ax}" (-> u16),
+        : [out] "=r" (-> u16),
     );
 }
 
@@ -95,7 +115,7 @@ pub fn readFlags() u64 {
     return asm volatile (
         \\pushfq
         \\popq %[out]
-        : [out] "={rax}" (-> u64),
+        : [out] "=r" (-> u64),
         :
         : .{ .rsp = true });
 }
@@ -125,22 +145,32 @@ pub fn readInterruptDescriptorTableRegister(address: *DescriptorTableRegister) v
 pub fn readStackPointer() u64 {
     return asm volatile (
         \\movq %%rsp, %[out]
-        : [out] "={rax}" (-> u64),
+        : [out] "=r" (-> u64),
     );
 }
 
 pub fn readStackSegment() u16 {
     return asm volatile (
         \\movw %%ss, %[out]
-        : [out] "={ax}" (-> u16),
+        : [out] "=r" (-> u16),
     );
+}
+
+pub fn setDataSegments(selector: u16) void {
+    asm volatile (
+        \\ movw %%ax, %%ds
+        \\ movw %%ax, %%es
+        \\ movw %%ax, %%ss
+        :
+        : [selector] "{ax}" (selector),
+        : .{ .ds = true, .es = true, .rax = true, .ss = true });
 }
 
 pub fn writeCr3(value: u64) void {
     asm volatile (
         \\movq %[value], %%cr3
         :
-        : [value] "{rax}" (value),
+        : [value] "r" (value),
         : .{ .memory = true });
 }
 

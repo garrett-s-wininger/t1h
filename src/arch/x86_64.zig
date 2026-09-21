@@ -1,6 +1,7 @@
 const amd = @import("x86_64/amd.zig");
 const alloc = @import("allocation.zig");
 const cpuid = @import("x86_64/cpuid.zig");
+const gdt = @import("x86_64/gdt.zig");
 const idt = @import("x86_64/idt.zig");
 const inst = @import("x86_64/inst.zig");
 const uart = @import("../peripherals/uart.zig");
@@ -131,10 +132,94 @@ pub fn initializeHostAddressSpace(allocator: alloc.PageAllocator) Error!void {
     inst.writeCr3(page_table_start);
 }
 
+// NOTE(garrett): This should be initialized once and then treated as a constant for the
+// lifetime of the Hypervisor.
+var descriptor_table: inst.DescriptorTableRegister = undefined;
+const gdt_entries: [3]gdt.SegmentDescriptor = .{
+    gdt.SegmentDescriptor.nullEntry(),
+    gdt.SegmentDescriptor{
+        .limit_low = 0,
+        .base_low = 0,
+        .base_middle = 0,
+        .access = gdt.AccessFlags{
+            .type = gdt.AccessType{
+                .code = gdt.CodeAccess{
+                    .accessed = 0,
+                    .readable = 1,
+                    .conforming = 0,
+                    .must_be_1 = 1,
+                },
+            },
+            .is_code_or_data = 1,
+            .descriptor_privilege_level = 0,
+            .present = 1,
+        },
+        .limit_high = 0,
+        .flags = gdt.Flags{
+            .available = 0,
+            .is_long_mode = 1,
+            .is_32_bit = 0,
+            .is_limit_in_page_granularity = 0,
+        },
+        .base_high = 0,
+    },
+    gdt.SegmentDescriptor{
+        .limit_low = 0,
+        .base_low = 0,
+        .base_middle = 0,
+        .access = gdt.AccessFlags{
+            .type = gdt.AccessType{
+                .data = gdt.DataAccess{
+                    .accessed = 0,
+                    .writable = 1,
+                    .expand_down = 0,
+                    .must_be_0 = 0,
+                },
+            },
+            .is_code_or_data = 1,
+            .descriptor_privilege_level = 0,
+            .present = 1,
+        },
+        .limit_high = 0,
+        .flags = gdt.Flags{
+            .available = 0,
+            .is_long_mode = 0,
+            .is_32_bit = 0,
+            .is_limit_in_page_granularity = 0,
+        },
+        .base_high = 0,
+    },
+};
+
+const code_segment_selector = gdt.SegmentSelector{
+    .privilege_level = 0,
+    .table_selector = 0,
+    .table_index = 1,
+};
+
+const data_segment_selector = gdt.SegmentSelector{
+    .privilege_level = 0,
+    .table_selector = 0,
+    .table_index = 2,
+};
+
+pub fn initializeHostExecutionContext() Error!void {
+    descriptor_table = inst.DescriptorTableRegister{
+        .limit = (@sizeOf(gdt.SegmentDescriptor) * gdt_entries.len) - 1,
+        .base = @intFromPtr(&gdt_entries[0]),
+    };
+
+    inst.loadGlobalDescriptorTable(&descriptor_table);
+
+    const segment_selector: u16 = @bitCast(code_segment_selector);
+    inst.reloadCodeSegment(segment_selector);
+    inst.setDataSegments(@bitCast(data_segment_selector));
+}
+
 pub fn initializeInterrupts(handler: idt.FatalFaultHandler) void {
     idt.fatal_fault_handler = handler;
 
-    const code_segment = inst.readCodeSegment();
+    const code_segment: u16 = @bitCast(code_segment_selector);
 
     for (0..idt.interrupt_table.len) |idx| {
         idt.interrupt_table[idx] = idt.gateForAddress(

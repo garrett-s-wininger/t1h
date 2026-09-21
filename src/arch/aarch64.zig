@@ -38,6 +38,11 @@ pub fn detect() Error!Backend {
 }
 
 pub fn initializeHostAddressSpace(_: alloc.PageAllocator) Error!void {}
+
+pub fn initializeHostExecutionContext() Error!void {
+    return error.NotImplemented;
+}
+
 pub fn initializeInterrupts(_: FatalFaultHandler) void {}
 
 pub fn nameForInterruptVector(_: u8) []const u8 {
