@@ -1,5 +1,6 @@
 const alloc = @import("arch/allocation.zig");
 const builtin = @import("builtin");
+const guest = @import("guest.zig");
 const logging = @import("logging.zig");
 const std = @import("std");
 const uefi = std.os.uefi;
@@ -129,7 +130,33 @@ pub fn enter(logger: Logger, handoff_data: UefiHandoff) noreturn {
     Architecture.initializeInterrupts(&panic);
     kernel_logger.log("Interrupt handlers installed.");
 
-    cpu.prepareVirtualization(allocator) catch |err| switch (err) {
+    // NOTE(garrett): For our rudimentary guest, layout is 1 page code, 1 page RSP, and
+    // 4 pages for the PML4 tables.
+    const guest_memory = guest.Memory.init(allocator, 6) catch {
+        kernel_logger.log("Failed to allocate guest memory.");
+        Architecture.hlt();
+    };
+
+    kernel_logger.logFormatted("Assigned Guest Memory to 0x{X:0>8}", .{guest_memory.host_physical_start});
+    const translation_root = Architecture.initializeGuestAddressSpace(guest_memory);
+    kernel_logger.log("Guest pages tables configured.");
+
+    // TODO(garrett): We just apply an x64 HLT opcode here. If AArch64 takes off before we have
+    // PVH, we'll need a comptime switch to handle that. Otherwise, we really want to
+    // load the instructions from an actual boot target.
+    const opcodes: [*]u8 = @ptrFromInt(guest_memory.host_physical_start);
+    opcodes[0] = 0xF4;
+
+    const instance = guest.Instance{
+        .memory = guest_memory,
+        .bootstrap = guest.BootstrapState{
+            .instruction_pointer = 0x0000,
+            .stack_pointer = 0x2000,
+            .translation_root = translation_root,
+        },
+    };
+
+    cpu.prepareVirtualization(allocator, instance) catch |err| switch (err) {
         error.MemoryRequestFailed => {
             kernel_logger.log("Required memory could not be allocated.");
             Architecture.hlt();

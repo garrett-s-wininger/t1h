@@ -2,6 +2,7 @@ const amd = @import("x86_64/amd.zig");
 const alloc = @import("allocation.zig");
 const cpuid = @import("x86_64/cpuid.zig");
 const gdt = @import("x86_64/gdt.zig");
+const guest = @import("../guest.zig");
 const idt = @import("x86_64/idt.zig");
 const inst = @import("x86_64/inst.zig");
 const multitasking = @import("x86_64/multitasking.zig");
@@ -29,7 +30,7 @@ pub const Backend = union(enum) {
     // TODO(garrett): Add Intel variant
     amd: amd.Backend,
 
-    pub fn prepareVirtualization(self: *@This(), allocator: alloc.PageAllocator) Error!void {
+    pub fn prepareVirtualization(self: *@This(), allocator: alloc.PageAllocator, instance: guest.Instance) Error!void {
         return switch (self.*) {
             .amd => |*backend| {
                 if (!backend.isVirtualizationSupported()) return error.VirtualizationNotSupported;
@@ -41,7 +42,7 @@ pub const Backend = union(enum) {
                     return error.MemoryRequestFailed;
                 };
 
-                backend.prepareVirtualization(allocation_start_address);
+                backend.prepareVirtualization(allocation_start_address, instance);
             },
         };
     }
@@ -124,11 +125,11 @@ pub fn initializeHostAddressSpace(allocator: alloc.PageAllocator) Error!void {
 
     const pdpt: *paging.PageDirectoryPointerTable = @ptrFromInt(page_directory_pointer_start);
     pdpt[0].page_directory_address = @truncate(page_directory_table_start >> 12);
-    pdpt[0]._low = pdpt[0]._low | paging.present | paging.read_write;
+    pdpt[0]._low = paging.present | paging.read_write;
 
     const pml4: *paging.PageMapLevel4Table = @ptrFromInt(page_table_start);
     pml4[0].page_directory_pointer_address = @truncate(page_directory_pointer_start >> 12);
-    pml4[0]._low = pml4[0]._low | paging.present | paging.read_write;
+    pml4[0]._low = paging.present | paging.read_write;
 
     inst.writeCr3(page_table_start);
 }
@@ -287,6 +288,36 @@ pub fn initializeHostExecutionContext() Error!void {
     inst.reloadCodeSegment(segment_selector);
     inst.setDataSegments(@bitCast(data_segment_selector));
     inst.loadTaskRegister(@bitCast(task_segment_selector));
+}
+
+// TODO(garrett): We're configuring a 6-page memory layout for a halting virtual machine,
+// rather than a realistic one. As we get closer to PVH booting and more production
+// features, we'll need to be able to configure this better.
+pub fn initializeGuestAddressSpace(memory: guest.Memory) u64 {
+    const pml4_start = memory.host_physical_start + (2 * alloc.page_size);
+    const page_directory_pointer_start = pml4_start + alloc.page_size;
+    const page_directory_table_start = pml4_start + (2 * alloc.page_size);
+    const page_table_start = pml4_start + (3 * alloc.page_size);
+
+    const pt: *paging.PageTable = @ptrFromInt(page_table_start);
+    pt[0].physical_address = @truncate((pml4_start - (alloc.page_size * 2)) >> 12);
+    pt[0]._low = paging.present;
+    pt[1].physical_address = @truncate((pml4_start - alloc.page_size) >> 12);
+    pt[1]._low = paging.present | paging.read_write;
+
+    const pdt: *paging.PageDirectoryTable = @ptrFromInt(page_directory_table_start);
+    pdt[0].page_table_address = @truncate(page_table_start >> 12);
+    pdt[0]._low = paging.present | paging.read_write;
+
+    const pdpt: *paging.PageDirectoryPointerTable = @ptrFromInt(page_directory_pointer_start);
+    pdpt[0].page_directory_address = @truncate(page_directory_table_start >> 12);
+    pdpt[0]._low = paging.present | paging.read_write;
+
+    const pml4: *paging.PageMapLevel4Table = @ptrFromInt(pml4_start);
+    pml4[0].page_directory_pointer_address = @truncate(page_directory_pointer_start >> 12);
+    pml4[0]._low = paging.present | paging.read_write;
+
+    return pml4_start;
 }
 
 pub fn initializeInterrupts(handler: idt.FatalFaultHandler) void {

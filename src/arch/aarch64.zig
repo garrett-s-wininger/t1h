@@ -1,4 +1,5 @@
 const alloc = @import("allocation.zig");
+const guest = @import("../guest.zig");
 const uart = @import("../peripherals/uart.zig");
 
 // TODO(garrett): Determine by parsing the device tree blob rather than blindly assuming
@@ -21,7 +22,7 @@ pub const GuestExit = enum {
 };
 
 pub const Backend = struct {
-    pub fn prepareVirtualization(_: *@This(), _: alloc.PageAllocator) Error!void {
+    pub fn prepareVirtualization(_: *@This(), _: alloc.PageAllocator, _: guest.Instance) Error!void {
         return error.NotImplemented;
     }
 
@@ -41,6 +42,10 @@ pub fn initializeHostAddressSpace(_: alloc.PageAllocator) Error!void {}
 
 pub fn initializeHostExecutionContext() Error!void {
     return error.NotImplemented;
+}
+
+pub fn initializeGuestAddressSpace(_: guest.Memory) u64 {
+    return 0;
 }
 
 pub fn initializeInterrupts(_: FatalFaultHandler) void {}

@@ -1,0 +1,31 @@
+const alloc = @import("arch/allocation.zig");
+
+pub const BootstrapState = struct {
+    instruction_pointer: u64,
+    stack_pointer: u64,
+    translation_root: u64,
+};
+
+pub const Memory = struct {
+    host_physical_start: u64,
+    page_count: usize,
+
+    const Self = @This();
+
+    pub fn init(allocator: alloc.PageAllocator, page_count: usize) alloc.PageAllocator.Error!Self {
+        const host_start = try allocator.allocatePages(page_count);
+        const memory = @as([*]align(alloc.page_size) u8, @ptrFromInt(host_start))[0 .. page_count * alloc.page_size];
+
+        @memset(memory, 0);
+
+        return Self{
+            .host_physical_start = host_start,
+            .page_count = page_count,
+        };
+    }
+};
+
+pub const Instance = struct {
+    memory: Memory,
+    bootstrap: BootstrapState,
+};

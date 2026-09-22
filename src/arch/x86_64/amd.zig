@@ -1,5 +1,6 @@
 const cpuid = @import("cpuid.zig");
 const gdt = @import("gdt.zig");
+const guest = @import("../../guest.zig");
 const inst = @import("inst.zig");
 const std = @import("std");
 
@@ -193,10 +194,6 @@ const VirtualMachineControlBlock = struct {
     }
 };
 
-fn guestHlt() callconv(.naked) noreturn {
-    asm volatile ("hlt");
-}
-
 fn vmrun(vmcb_address: u64) void {
     asm volatile (
         \\vmrun
@@ -238,7 +235,7 @@ pub const Backend = struct {
         return svm_enabled;
     }
 
-    pub fn prepareVirtualization(self: *@This(), allocation_start_address: u64) void {
+    pub fn prepareVirtualization(self: *@This(), allocation_start_address: u64, instance: guest.Instance) void {
         const efer = inst.rdmsr(efer_msr);
         const svm_enabled_efer = efer | svm_enable_bit;
         inst.wrmsr(efer_msr, svm_enabled_efer);
@@ -252,7 +249,9 @@ pub const Backend = struct {
 
         const control_block: VirtualMachineControlBlock = .{ .raw = vm_control_block_address };
         control_block.fillFromCurrentCpu(svm_enabled_efer);
-        control_block.rip().* = @intFromPtr(&guestHlt);
+        control_block.rip().* = instance.bootstrap.instruction_pointer;
+        control_block.rsp().* = instance.bootstrap.stack_pointer;
+        control_block.cr3().* = instance.bootstrap.translation_root;
         self.vmcb = control_block;
     }
 
