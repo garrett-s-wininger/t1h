@@ -4,6 +4,7 @@ const cpuid = @import("x86_64/cpuid.zig");
 const gdt = @import("x86_64/gdt.zig");
 const idt = @import("x86_64/idt.zig");
 const inst = @import("x86_64/inst.zig");
+const multitasking = @import("x86_64/multitasking.zig");
 const uart = @import("../peripherals/uart.zig");
 const paging = @import("x86_64/paging.zig");
 const std = @import("std");
@@ -132,62 +133,117 @@ pub fn initializeHostAddressSpace(allocator: alloc.PageAllocator) Error!void {
     inst.writeCr3(page_table_start);
 }
 
+var tss = multitasking.TaskStateSegment{
+    .reserved1 = 0,
+    .rsp0 = 0,
+    .rsp1 = 0,
+    .rsp2 = 0,
+    .reserved2 = 0,
+    .ist1 = 0,
+    .ist2 = 0,
+    .ist3 = 0,
+    .ist4 = 0,
+    .ist5 = 0,
+    .ist6 = 0,
+    .ist7 = 0,
+    .reserved3 = 0,
+    .reserved4 = 0,
+    .io_bitmap_offset = multitasking.tss_size,
+};
+
 // NOTE(garrett): This should be initialized once and then treated as a constant for the
 // lifetime of the Hypervisor.
 var descriptor_table: inst.DescriptorTableRegister = undefined;
-const gdt_entries: [3]gdt.SegmentDescriptor = .{
-    gdt.SegmentDescriptor.nullEntry(),
-    gdt.SegmentDescriptor{
-        .limit_low = 0,
-        .base_low = 0,
-        .base_middle = 0,
-        .access = gdt.AccessFlags{
-            .type = gdt.AccessType{
-                .code = gdt.CodeAccess{
-                    .accessed = 0,
-                    .readable = 1,
-                    .conforming = 0,
-                    .must_be_1 = 1,
-                },
-            },
-            .is_code_or_data = 1,
-            .descriptor_privilege_level = 0,
-            .present = 1,
-        },
-        .limit_high = 0,
-        .flags = gdt.Flags{
-            .available = 0,
-            .is_long_mode = 1,
-            .is_32_bit = 0,
-            .is_limit_in_page_granularity = 0,
-        },
-        .base_high = 0,
+var gdt_entries: [5]gdt.Entry = .{
+    gdt.Entry{
+        .segment_descriptor = gdt.SegmentDescriptor.nullEntry(),
     },
-    gdt.SegmentDescriptor{
-        .limit_low = 0,
-        .base_low = 0,
-        .base_middle = 0,
-        .access = gdt.AccessFlags{
-            .type = gdt.AccessType{
-                .data = gdt.DataAccess{
-                    .accessed = 0,
-                    .writable = 1,
-                    .expand_down = 0,
-                    .must_be_0 = 0,
+    gdt.Entry{
+        .segment_descriptor = gdt.SegmentDescriptor{
+            .limit_low = 0,
+            .base_low = 0,
+            .base_middle = 0,
+            .access = gdt.AccessFlags{
+                .type = gdt.AccessType{
+                    .code = gdt.CodeAccess{
+                        .accessed = 0,
+                        .readable = 1,
+                        .conforming = 0,
+                        .must_be_1 = 1,
+                    },
                 },
+                .is_code_or_data = 1,
+                .descriptor_privilege_level = 0,
+                .present = 1,
             },
-            .is_code_or_data = 1,
-            .descriptor_privilege_level = 0,
-            .present = 1,
+            .limit_high = 0,
+            .flags = gdt.Flags{
+                .available = 0,
+                .is_long_mode = 1,
+                .is_32_bit = 0,
+                .is_limit_in_page_granularity = 0,
+            },
+            .base_high = 0,
         },
-        .limit_high = 0,
-        .flags = gdt.Flags{
-            .available = 0,
-            .is_long_mode = 0,
-            .is_32_bit = 0,
-            .is_limit_in_page_granularity = 0,
+    },
+    gdt.Entry{
+        .segment_descriptor = gdt.SegmentDescriptor{
+            .limit_low = 0,
+            .base_low = 0,
+            .base_middle = 0,
+            .access = gdt.AccessFlags{
+                .type = gdt.AccessType{
+                    .data = gdt.DataAccess{
+                        .accessed = 0,
+                        .writable = 1,
+                        .expand_down = 0,
+                        .must_be_0 = 0,
+                    },
+                },
+                .is_code_or_data = 1,
+                .descriptor_privilege_level = 0,
+                .present = 1,
+            },
+            .limit_high = 0,
+            .flags = gdt.Flags{
+                .available = 0,
+                .is_long_mode = 0,
+                .is_32_bit = 0,
+                .is_limit_in_page_granularity = 0,
+            },
+            .base_high = 0,
         },
-        .base_high = 0,
+    },
+    gdt.Entry{
+        .segment_descriptor = gdt.SegmentDescriptor{
+            .limit_low = 0,
+            .base_low = 0,
+            .base_middle = 0,
+            .access = gdt.AccessFlags{
+                .type = gdt.AccessType{
+                    .system = gdt.SystemAccess.tss_available,
+                },
+                .is_code_or_data = 0,
+                .descriptor_privilege_level = 0,
+                .present = 1,
+            },
+            .limit_high = 0,
+            .flags = gdt.Flags{
+                .available = 0,
+                .is_long_mode = 0,
+                .is_32_bit = 0,
+                .is_limit_in_page_granularity = 0,
+            },
+            .base_high = 0,
+        },
+    },
+    gdt.Entry{
+        .system_segment_expansion = gdt.SystemSegmentExpansion{
+            .base_address_uppermost = 0,
+            .reserved1 = 0,
+            .must_be_0 = 0,
+            .reserved2 = 0,
+        },
     },
 };
 
@@ -203,17 +259,34 @@ const data_segment_selector = gdt.SegmentSelector{
     .table_index = 2,
 };
 
+const task_segment_selector = gdt.SegmentSelector{
+    .privilege_level = 0,
+    .table_selector = 0,
+    .table_index = 3,
+};
+
 pub fn initializeHostExecutionContext() Error!void {
     descriptor_table = inst.DescriptorTableRegister{
         .limit = (@sizeOf(gdt.SegmentDescriptor) * gdt_entries.len) - 1,
         .base = @intFromPtr(&gdt_entries[0]),
     };
 
+    const tss_limit: usize = multitasking.tss_size - 1;
+    const tss_address: u64 = @intFromPtr(&tss);
+    const tss_entry: usize = 3;
+
+    gdt_entries[tss_entry].segment_descriptor.limit_low = @truncate(tss_limit);
+    gdt_entries[tss_entry].segment_descriptor.limit_high = @truncate(tss_limit >> 16);
+    gdt_entries[tss_entry].segment_descriptor.base_low = @truncate(tss_address);
+    gdt_entries[tss_entry].segment_descriptor.base_middle = @truncate(tss_address >> 16);
+    gdt_entries[tss_entry].segment_descriptor.base_high = @truncate(tss_address >> 24);
+    gdt_entries[tss_entry + 1].system_segment_expansion.base_address_uppermost = @truncate(tss_address >> 32);
     inst.loadGlobalDescriptorTable(&descriptor_table);
 
     const segment_selector: u16 = @bitCast(code_segment_selector);
     inst.reloadCodeSegment(segment_selector);
     inst.setDataSegments(@bitCast(data_segment_selector));
+    inst.loadTaskRegister(@bitCast(task_segment_selector));
 }
 
 pub fn initializeInterrupts(handler: idt.FatalFaultHandler) void {

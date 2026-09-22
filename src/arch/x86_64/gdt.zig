@@ -20,9 +20,19 @@ pub const DataAccess = packed struct(u4) {
     must_be_0: u1,
 };
 
+pub const SystemAccess = enum(u4) {
+    ldt = 0b0010,
+    tss_available = 0b1001,
+    tss_busy = 0b1011,
+    call_gate = 0b1100,
+    interrupt_gate = 0b1110,
+    trap_gate = 0b1111,
+};
+
 pub const AccessType = packed union(u4) {
     code: CodeAccess,
     data: DataAccess,
+    system: SystemAccess,
 };
 
 pub const AccessFlags = packed struct(u8) {
@@ -73,6 +83,18 @@ pub const SegmentDescriptor = packed struct(u64) {
             .base_high = 0,
         };
     }
+};
+
+pub const SystemSegmentExpansion = packed struct(u64) {
+    base_address_uppermost: u32,
+    reserved1: u8,
+    must_be_0: u5,
+    reserved2: u19,
+};
+
+pub const Entry = packed union(u64) {
+    segment_descriptor: SegmentDescriptor,
+    system_segment_expansion: SystemSegmentExpansion,
 };
 
 pub const DescriptorTable = struct {
