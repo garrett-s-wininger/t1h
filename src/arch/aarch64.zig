@@ -11,23 +11,25 @@ pub const console_uart_base = uart_base;
 
 pub const Error = error{
     MemoryRequestFailed,
+    NestedPagingNotSupported,
     NotImplemented,
     VirtualizationDisabled,
     VirtualizationNotSupported,
 };
 
-pub const GuestExit = enum {
-    halt,
-    invalid_guest_state,
-};
-
 pub const Backend = struct {
-    pub fn prepareVirtualization(_: *@This(), _: alloc.PageAllocator, _: guest.Instance) Error!void {
+    const Self = @This();
+
+    pub fn isNestedPagingSupported(_: Self) bool {
+        return false;
+    }
+
+    pub fn prepareVirtualization(_: *Self, _: alloc.PageAllocator, _: guest.Instance) Error!void {
         return error.NotImplemented;
     }
 
-    pub fn runGuest(_: @This()) GuestExit {
-        return .invalid_guest_state;
+    pub fn runGuest(_: Self) guest.Exit {
+        return .halt;
     }
 };
 

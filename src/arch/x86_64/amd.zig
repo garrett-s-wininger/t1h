@@ -1,7 +1,9 @@
+const alloc = @import("../allocation.zig");
 const cpuid = @import("cpuid.zig");
 const gdt = @import("gdt.zig");
 const guest = @import("../../guest.zig");
 const inst = @import("inst.zig");
+const paging = @import("paging.zig");
 const std = @import("std");
 
 pub const vendor_string = "AuthenticAMD";
@@ -20,34 +22,53 @@ const svm_enable_bit = (1 << 12);
 
 const vm_host_save_address_msr = 0xC001_0117;
 
+const svm_available_features = 0x8000_000A;
+const nested_paging_bit = (1 << 0);
+
+const NestedPagingControl = packed struct(u64) {
+    is_nested_paging_enabled: u1,
+    _reserved: u63,
+};
+
 const InterceptBlock1 = packed struct(u32) {
     _reserved1: u24,
     hlt: u1,
     _reserved2: u7,
 };
 
-const InterceptBlock2 = packed struct(u32) { vmrun: u1, _reserved: u31 };
-const Segment = packed struct(u128) { selector: u16, attribute: u16, limit: u32, base: u64 };
+const InterceptBlock2 = packed struct(u32) {
+    vmrun: u1,
+    _reserved: u31,
+};
+
+const Segment = packed struct(u128) {
+    selector: u16,
+    attribute: u16,
+    limit: u32,
+    base: u64,
+};
 
 const VirtualMachineControlBlock = struct {
     const total_size = 4096;
     const saved_state_boundary = 0x400;
 
-    raw: *[@This().total_size]u8,
+    const Self = @This();
 
-    fn ptr(self: @This(), comptime offset: usize, comptime T: type) *T {
-        comptime if ((offset + @sizeOf(T)) > @This().total_size) {
+    raw: *[Self.total_size]u8,
+
+    fn ptr(self: Self, comptime offset: usize, comptime T: type) *T {
+        comptime if ((offset + @sizeOf(T)) > Self.total_size) {
             @compileError("Requested offset/type would be outside of VMCB memory");
         };
 
         return @ptrCast(@alignCast(self.raw[offset..][0..@sizeOf(T)]));
     }
 
-    fn savedStatePtr(self: @This(), comptime offset: usize, comptime T: type) *T {
-        return self.ptr(offset + @This().saved_state_boundary, T);
+    fn savedStatePtr(self: Self, comptime offset: usize, comptime T: type) *T {
+        return self.ptr(offset + Self.saved_state_boundary, T);
     }
 
-    fn asid(self: @This()) *u32 {
+    fn asid(self: Self) *u32 {
         return self.ptr(0x058, u32);
     }
 
@@ -57,43 +78,59 @@ const VirtualMachineControlBlock = struct {
         return @as(u16, access_value) | (@as(u16, segment_flags) << 8);
     }
 
-    fn cpl(self: @This()) *u8 {
+    fn cpl(self: Self) *u8 {
         return self.savedStatePtr(0x0CB, u8);
     }
 
-    fn cr0(self: @This()) *u64 {
+    fn cr0(self: Self) *u64 {
         return self.savedStatePtr(0x158, u64);
     }
 
-    fn cr3(self: @This()) *u64 {
+    fn cr3(self: Self) *u64 {
         return self.savedStatePtr(0x150, u64);
     }
 
-    fn cr4(self: @This()) *u64 {
+    fn cr4(self: Self) *u64 {
         return self.savedStatePtr(0x148, u64);
     }
 
-    fn cs(self: @This()) *Segment {
+    fn cs(self: Self) *Segment {
         return self.savedStatePtr(0x010, Segment);
     }
 
-    fn ds(self: @This()) *Segment {
+    fn ds(self: Self) *Segment {
         return self.savedStatePtr(0x030, Segment);
     }
 
-    fn efer(self: @This()) *u64 {
+    fn efer(self: Self) *u64 {
         return self.savedStatePtr(0x0D0, u64);
     }
 
-    fn es(self: @This()) *Segment {
+    fn es(self: Self) *Segment {
         return self.savedStatePtr(0x000, Segment);
     }
 
-    fn exit_code(self: @This()) *u64 {
+    fn exit_code(self: Self) *u64 {
         return self.ptr(0x070, u64);
     }
 
-    fn fillFromCurrentCpu(self: @This(), efer_override: u64) void {
+    fn exit_info1(self: Self) *u64 {
+        return self.ptr(0x078, u64);
+    }
+
+    fn exit_info2(self: Self) *u64 {
+        return self.ptr(0x080, u64);
+    }
+
+    fn nested_cr3(self: Self) *u64 {
+        return self.ptr(0x0B0, u64);
+    }
+
+    fn nested_paging(self: Self) *NestedPagingControl {
+        return self.ptr(0x090, NestedPagingControl);
+    }
+
+    fn fillFromCurrentCpu(self: Self, efer_override: u64) void {
         vmsave(@intFromPtr(self.raw));
 
         self.asid().* = 1;
@@ -161,42 +198,42 @@ const VirtualMachineControlBlock = struct {
         };
     }
 
-    fn flags(self: @This()) *u64 {
+    fn flags(self: Self) *u64 {
         return self.savedStatePtr(0x170, u64);
     }
 
-    fn gdtr(self: @This()) *Segment {
+    fn gdtr(self: Self) *Segment {
         return self.savedStatePtr(0x060, Segment);
     }
 
-    fn idtr(self: @This()) *Segment {
+    fn idtr(self: Self) *Segment {
         return self.savedStatePtr(0x080, Segment);
     }
 
-    fn interceptBlock1(self: @This()) *InterceptBlock1 {
+    fn interceptBlock1(self: Self) *InterceptBlock1 {
         return self.ptr(0x00C, InterceptBlock1);
     }
 
-    fn interceptBlock2(self: @This()) *InterceptBlock2 {
+    fn interceptBlock2(self: Self) *InterceptBlock2 {
         return self.ptr(0x010, InterceptBlock2);
     }
 
-    fn rip(self: @This()) *u64 {
+    fn rip(self: Self) *u64 {
         return self.savedStatePtr(0x178, u64);
     }
 
-    fn rsp(self: @This()) *u64 {
+    fn rsp(self: Self) *u64 {
         return self.savedStatePtr(0x1D8, u64);
     }
 
-    fn ss(self: @This()) *Segment {
+    fn ss(self: Self) *Segment {
         return self.savedStatePtr(0x020, Segment);
     }
 };
 
 fn vmrun(vmcb_address: u64) void {
     asm volatile (
-        \\vmrun
+        \\ vmrun
         :
         : [vmcb_address] "{rax}" (vmcb_address),
         : .{ .memory = true });
@@ -204,23 +241,42 @@ fn vmrun(vmcb_address: u64) void {
 
 fn vmsave(save_address: u64) void {
     asm volatile (
-        \\vmsave
+        \\ vmsave
         :
         : [save_address] "{rax}" (save_address),
     );
 }
+
+pub const VmExit = struct {
+    code: u64,
+    info1: u64,
+    info2: u64,
+};
 
 pub const Backend = struct {
     max_standard_func: u32,
     max_extended_func: u32,
     vmcb: ?VirtualMachineControlBlock = null,
 
-    pub fn isVirtualizationDisabled(_: @This()) bool {
+    const Self = @This();
+
+    pub fn isNestedPagingSupported(self: Self) bool {
+        if (self.max_extended_func < svm_available_features) return false;
+
+        const svm_features = cpuid.query(svm_available_features, 0);
+        if ((svm_features.edx & nested_paging_bit) != 0) {
+            return true;
+        }
+
+        return false;
+    }
+
+    pub fn isVirtualizationDisabled(_: Self) bool {
         const vm_cr = inst.rdmsr(vm_cr_msr);
         return (vm_cr & svm_disabled_bit) != 0;
     }
 
-    pub fn isVirtualizationSupported(self: @This()) bool {
+    pub fn isVirtualizationSupported(self: Self) bool {
         if (self.max_standard_func < processor_model_and_feature_ids) return false;
 
         const standard_feature_information = cpuid.query(processor_model_and_feature_ids, 0);
@@ -235,7 +291,50 @@ pub const Backend = struct {
         return svm_enabled;
     }
 
-    pub fn prepareVirtualization(self: *@This(), allocation_start_address: u64, instance: guest.Instance) void {
+    fn prepareNestedPageTables(pml4_start: u64, instance: guest.Memory) u64 {
+        const tables = @as(
+            [*]align(alloc.page_size) u8,
+            @ptrFromInt(pml4_start),
+        )[0 .. 4 * alloc.page_size];
+
+        @memset(tables, 0);
+
+        const page_directory_pointer_start = pml4_start + alloc.page_size;
+        const page_directory_table_start = pml4_start + (2 * alloc.page_size);
+        const page_table_start = pml4_start + (3 * alloc.page_size);
+
+        // NOTE(garrett): Nested page table walks are considered user accesses and so
+        // must be granted user permissions in order for them to be accessible when
+        // the walk occurs.
+        const npt_read_only = paging.present | paging.user_accessible;
+        const npt_read_write = npt_read_only | paging.read_write;
+
+        const pt: *paging.PageTable = @ptrFromInt(page_table_start);
+        for (0..instance.page_count) |idx| {
+            pt[idx].physical_address = @truncate(instance.host_physical_start + (idx * alloc.page_size) >> 12);
+            pt[idx]._low = npt_read_only;
+
+            if (idx != 0) {
+                pt[idx]._low = npt_read_write;
+            }
+        }
+
+        const pdt: *paging.PageDirectoryTable = @ptrFromInt(page_directory_table_start);
+        pdt[0].page_table_address = @truncate(page_table_start >> 12);
+        pdt[0]._low = npt_read_write;
+
+        const pdpt: *paging.PageDirectoryPointerTable = @ptrFromInt(page_directory_pointer_start);
+        pdpt[0].page_directory_address = @truncate(page_directory_table_start >> 12);
+        pdpt[0]._low = npt_read_write;
+
+        const pml4: *paging.PageMapLevel4Table = @ptrFromInt(pml4_start);
+        pml4[0].page_directory_pointer_address = @truncate(page_directory_pointer_start >> 12);
+        pml4[0]._low = npt_read_write;
+
+        return pml4_start;
+    }
+
+    pub fn prepareVirtualization(self: *Self, allocation_start_address: u64, instance: guest.Instance) void {
         const efer = inst.rdmsr(efer_msr);
         const svm_enabled_efer = efer | svm_enable_bit;
         inst.wrmsr(efer_msr, svm_enabled_efer);
@@ -252,13 +351,24 @@ pub const Backend = struct {
         control_block.rip().* = instance.bootstrap.instruction_pointer;
         control_block.rsp().* = instance.bootstrap.stack_pointer;
         control_block.cr3().* = instance.bootstrap.translation_root;
+
+        control_block.nested_cr3().* = prepareNestedPageTables(
+            (allocation_start_address + (2 * alloc.page_size)),
+            instance.memory,
+        );
+
+        control_block.nested_paging().* = NestedPagingControl{ .is_nested_paging_enabled = 1, ._reserved = 0 };
         self.vmcb = control_block;
     }
 
-    pub fn runGuest(self: @This()) u64 {
+    pub fn runGuest(self: Self) VmExit {
         const vmcb = self.vmcb orelse @panic("VMCB not prepared");
         vmrun(@intFromPtr(vmcb.raw));
 
-        return vmcb.exit_code().*;
+        return .{
+            .code = vmcb.exit_code().*,
+            .info1 = vmcb.exit_info1().*,
+            .info2 = vmcb.exit_info2().*,
+        };
     }
 };

@@ -18,27 +18,30 @@ pub const console_uart_base = x64_uart.com1;
 
 pub const Error = error{
     MemoryRequestFailed,
+    NestedPagingNotSupported,
     UnknownVendor,
     VirtualizationDisabled,
     VirtualizationNotSupported,
 };
 
 pub const FaultInfo = idt.FaultInfo;
-pub const GuestExit = enum { halt, invalid_guest_state };
 
 pub const Backend = union(enum) {
     // TODO(garrett): Add Intel variant
     amd: amd.Backend,
 
-    pub fn prepareVirtualization(self: *@This(), allocator: alloc.PageAllocator, instance: guest.Instance) Error!void {
+    const Self = @This();
+
+    pub fn prepareVirtualization(self: *Self, allocator: alloc.PageAllocator, instance: guest.Instance) Error!void {
         return switch (self.*) {
             .amd => |*backend| {
                 if (!backend.isVirtualizationSupported()) return error.VirtualizationNotSupported;
                 if (backend.isVirtualizationDisabled()) return error.VirtualizationDisabled;
+                if (!backend.isNestedPagingSupported()) return error.NestedPagingNotSupported;
 
-                // TODO(garrett): Move from our hardcoded 2-page host save area and vm control
-                // to a more dynamic setup.
-                const allocation_start_address = allocator.allocatePages(2) catch {
+                // TODO(garrett): Move from our hardcoded host save area and vm control
+                // (+ 4-level extended/nested page table) to a more dynamic setup.
+                const allocation_start_address = allocator.allocatePages(6) catch {
                     return error.MemoryRequestFailed;
                 };
 
@@ -47,26 +50,32 @@ pub const Backend = union(enum) {
         };
     }
 
-    pub fn maxExtendedFunc(self: @This()) u32 {
+    pub fn maxExtendedFunc(self: Self) u32 {
         return switch (self) {
             .amd => |backend| backend.max_extended_func,
         };
     }
 
-    pub fn maxStandardFunc(self: @This()) u32 {
+    pub fn maxStandardFunc(self: Self) u32 {
         return switch (self) {
             .amd => |backend| backend.max_standard_func,
         };
     }
 
-    pub fn runGuest(self: @This()) GuestExit {
+    pub fn runGuest(self: Self) guest.Exit {
         return switch (self) {
             .amd => |backend| {
-                const exit_code = backend.runGuest();
+                const exit = backend.runGuest();
 
-                switch (exit_code) {
+                switch (exit.code) {
                     0x78 => return .halt,
-                    else => return .invalid_guest_state,
+                    0x400 => return .{
+                        .second_stage_fault = .{
+                            .guest_physical_address = exit.info2,
+                            .raw_status = exit.info1,
+                        },
+                    },
+                    else => |code| return .{ .unexpected = code },
                 }
             },
         };
@@ -294,30 +303,37 @@ pub fn initializeHostExecutionContext() Error!void {
 // rather than a realistic one. As we get closer to PVH booting and more production
 // features, we'll need to be able to configure this better.
 pub fn initializeGuestAddressSpace(memory: guest.Memory) u64 {
-    const pml4_start = memory.host_physical_start + (2 * alloc.page_size);
-    const page_directory_pointer_start = pml4_start + alloc.page_size;
-    const page_directory_table_start = pml4_start + (2 * alloc.page_size);
-    const page_table_start = pml4_start + (3 * alloc.page_size);
+    const host_pml4_start = memory.host_physical_start + (2 * alloc.page_size);
+    const host_page_directory_pointer_start = host_pml4_start + alloc.page_size;
+    const host_page_directory_table_start = host_pml4_start + (2 * alloc.page_size);
+    const host_page_table_start = host_pml4_start + (3 * alloc.page_size);
 
-    const pt: *paging.PageTable = @ptrFromInt(page_table_start);
-    pt[0].physical_address = @truncate((pml4_start - (alloc.page_size * 2)) >> 12);
+    const guest_code_start = 0x0000;
+    const guest_stack_start = 0x1000;
+    const guest_pml4_start = 0x2000;
+    const guest_pdpt_start = 0x3000;
+    const guest_pdt_start = 0x4000;
+    const guest_pt_start = 0x5000;
+
+    const pt: *paging.PageTable = @ptrFromInt(host_page_table_start);
+    pt[0].physical_address = @truncate(guest_code_start >> 12);
     pt[0]._low = paging.present;
-    pt[1].physical_address = @truncate((pml4_start - alloc.page_size) >> 12);
+    pt[1].physical_address = @truncate(guest_stack_start >> 12);
     pt[1]._low = paging.present | paging.read_write;
 
-    const pdt: *paging.PageDirectoryTable = @ptrFromInt(page_directory_table_start);
-    pdt[0].page_table_address = @truncate(page_table_start >> 12);
+    const pdt: *paging.PageDirectoryTable = @ptrFromInt(host_page_directory_table_start);
+    pdt[0].page_table_address = @truncate(guest_pt_start >> 12);
     pdt[0]._low = paging.present | paging.read_write;
 
-    const pdpt: *paging.PageDirectoryPointerTable = @ptrFromInt(page_directory_pointer_start);
-    pdpt[0].page_directory_address = @truncate(page_directory_table_start >> 12);
+    const pdpt: *paging.PageDirectoryPointerTable = @ptrFromInt(host_page_directory_pointer_start);
+    pdpt[0].page_directory_address = @truncate(guest_pdt_start >> 12);
     pdpt[0]._low = paging.present | paging.read_write;
 
-    const pml4: *paging.PageMapLevel4Table = @ptrFromInt(pml4_start);
-    pml4[0].page_directory_pointer_address = @truncate(page_directory_pointer_start >> 12);
+    const pml4: *paging.PageMapLevel4Table = @ptrFromInt(host_pml4_start);
+    pml4[0].page_directory_pointer_address = @truncate(guest_pdpt_start >> 12);
     pml4[0]._low = paging.present | paging.read_write;
 
-    return pml4_start;
+    return guest_pml4_start;
 }
 
 pub fn initializeInterrupts(handler: idt.FatalFaultHandler) void {

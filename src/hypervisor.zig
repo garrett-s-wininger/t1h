@@ -82,18 +82,18 @@ const BootstrapAllocator = struct {
 var kernel_logger: Logger = undefined;
 
 fn x86_64_panic(fault_info: Architecture.FaultInfo) void {
-    kernel_logger.logFormatted("\r\nKernel Panic from {s} (Error Code:  0x{X:0>8}):\r\n", .{
+    kernel_logger.logFormatted("\r\nKernel Panic from {s} (Error Code:  0x{X:0>16}):\r\n", .{
         Architecture.nameForInterruptVector(fault_info.interrupt_vector),
         fault_info.error_code,
     });
 
     if (fault_info.fault_address) |address| {
-        kernel_logger.logFormatted("  CR2:    0x{X:0>8}", .{address});
+        kernel_logger.logFormatted("  CR2:    0x{X:0>16}", .{address});
     }
 
-    kernel_logger.logFormatted("  RIP:    0x{X:0>8}", .{fault_info.instruction_pointer});
-    kernel_logger.logFormatted("  RSP:    0x{X:0>8}", .{fault_info.stack_pointer});
-    kernel_logger.logFormatted("  RFLAGS: 0x{X:0>8}", .{fault_info.register_flags});
+    kernel_logger.logFormatted("  RIP:    0x{X:0>16}", .{fault_info.instruction_pointer});
+    kernel_logger.logFormatted("  RSP:    0x{X:0>16}", .{fault_info.stack_pointer});
+    kernel_logger.logFormatted("  RFLAGS: 0x{X:0>16}", .{fault_info.register_flags});
 }
 
 fn panic(fault_info: Architecture.FaultInfo) noreturn {
@@ -161,6 +161,10 @@ pub fn enter(logger: Logger, handoff_data: UefiHandoff) noreturn {
             kernel_logger.log("Required memory could not be allocated.");
             Architecture.hlt();
         },
+        error.NestedPagingNotSupported => {
+            kernel_logger.log("Nested paging is not supported.");
+            Architecture.hlt();
+        },
         error.VirtualizationDisabled => {
             kernel_logger.log("Virtualization has been disabled, please check firmware settings.");
             Architecture.hlt();
@@ -179,9 +183,22 @@ pub fn enter(logger: Logger, handoff_data: UefiHandoff) noreturn {
 
     switch (status) {
         .halt => kernel_logger.log("Guest boot successful!"),
-        .invalid_guest_state => kernel_logger.log("Guest was configured incorrectly and could not boot."),
+        .second_stage_fault => |fault_info| {
+            kernel_logger.log("Guest encountered nested page fault:");
+            kernel_logger.logFormatted(
+                "  Address: 0x{X:0>16}  Status: 0x{X:0>16}",
+                .{
+                    fault_info.guest_physical_address,
+                    fault_info.raw_status,
+                },
+            );
+        },
+        .unexpected => |exit_code| kernel_logger.logFormatted(
+            "Guest exited unexpectedly with code: 0x{X:0>16}",
+            .{exit_code},
+        ),
     }
 
-    kernel_logger.log("Hypervisor gracefully terminating...");
+    kernel_logger.log("Hypervisor now halted.");
     Architecture.hlt();
 }

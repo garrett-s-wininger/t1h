@@ -29,3 +29,14 @@ pub const Instance = struct {
     memory: Memory,
     bootstrap: BootstrapState,
 };
+
+pub const SecondStageFault = struct {
+    guest_physical_address: u64,
+    raw_status: u64,
+};
+
+pub const Exit = union(enum) {
+    halt,
+    second_stage_fault: SecondStageFault,
+    unexpected: u64,
+};
